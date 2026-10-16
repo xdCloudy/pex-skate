@@ -1566,6 +1566,29 @@ fn broadcast_pose(
     acknowledged_sequence: u32,
     prop_updates: &[prop_physics::PropUpdate],
 ) {
+    let payload = encode_pose_payload(
+        entity_id,
+        pose,
+        active,
+        map_backed,
+        map_filename,
+        map_digests,
+        acknowledged_sequence,
+        prop_updates,
+    );
+    broadcast_payload(server, &payload);
+}
+
+fn encode_pose_payload(
+    entity_id: u32,
+    pose: &SkatePose,
+    active: bool,
+    map_backed: bool,
+    map_filename: Option<&str>,
+    map_digests: Option<&MapDigests>,
+    acknowledged_sequence: u32,
+    prop_updates: &[prop_physics::PropUpdate],
+) -> Vec<u8> {
     let mut payload = Vec::with_capacity(1100);
     payload.push(11); // version
     payload.push(u8::from(active));
@@ -1600,7 +1623,7 @@ fn broadcast_pose(
     append_map_identity(&mut payload, map_backed, map_filename, map_digests);
     payload.extend_from_slice(&acknowledged_sequence.to_be_bytes());
     append_prop_updates(&mut payload, prop_updates);
-    broadcast_payload(server, &payload);
+    payload
 }
 
 fn append_prop_updates(payload: &mut Vec<u8>, updates: &[prop_physics::PropUpdate]) {
@@ -1753,12 +1776,13 @@ pumpkin_plugin_api::register_plugin!(PexSkate);
 mod integration_tests {
     use super::{
         CLIENT_PROTOCOL_VERSION, COLLISION_BLOCKS_GLOBAL_PER_TICK, COLLISION_BLOCKS_PER_TICK,
-        COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, PropWorldKey,
-        ServerState, append_map_identity, append_prop_updates, append_visual, clear_skate_state,
-        collision::CollisionScan, collision_refresh_needed, collision_work_order, engine,
-        initial_scan_recenter_needed, physics::Controls, player_collision_impact, prop_physics,
-        sequence_is_newer, should_refresh_collision, shove_impact, shove_pressed_edge,
-        supports_client_protocol, swept_player_collision_impact, take_collision_budget,
+        COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, MapDigests, PendingSkateLoad,
+        PropWorldKey, ServerState, append_map_identity, append_prop_updates, append_visual,
+        clear_skate_state, collision::CollisionScan, collision_refresh_needed,
+        collision_work_order, encode_pose_payload, engine, initial_scan_recenter_needed,
+        physics::Controls, player_collision_impact, prop_physics, sequence_is_newer,
+        should_refresh_collision, shove_impact, shove_pressed_edge, supports_client_protocol,
+        swept_player_collision_impact, take_collision_budget,
     };
     use engine::SkatePose;
     use std::time::{Duration, Instant};
@@ -1778,6 +1802,48 @@ mod integration_tests {
             sketchy: false,
             visual: None,
         }
+    }
+
+    #[test]
+    fn server_state_v11_matches_the_client_codec_fixture() {
+        let mut state = pose([1.25, 2.5, -3.75], [0.125, -0.25, 0.5]);
+        state.board = [4.0, 5.0, 6.0, 0.0, 0.0, 0.70710677, 0.70710677];
+        state.trick_name = "Kickflip".to_string();
+        state.sequence_score = 123.5;
+        state.line_score = 456.25;
+        state.total_score = 789.75;
+        state.multiplier = 2.5;
+        state.line_time = 1.25;
+        state.clean = false;
+        state.sketchy = true;
+        let digests = MapDigests {
+            map: "ab".repeat(32),
+            props: "cd".repeat(32),
+        };
+        let updates = [prop_physics::PropUpdate {
+            identity: 0x0102_0304_0506_0708,
+            translation: [1.5, -2.25, 0.125],
+            yaw: 0.75,
+            pivot: [10.0, 64.0, -5.0],
+        }];
+        let bytes = encode_pose_payload(
+            0x0102_0304,
+            &state,
+            true,
+            true,
+            Some("University.skate"),
+            Some(&digests),
+            0x1122_3344,
+            &updates,
+        );
+        let hex = bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            hex,
+            include_str!("../client/src/test/resources/pex-state-v11.hex").trim()
+        );
     }
 
     #[test]

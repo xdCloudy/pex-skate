@@ -6,6 +6,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Server-authoritative DMO prop translation and yaw rotation with client-side interpolation between state snapshots.
 - Off-center board impacts add bounded yaw rotation around a shared prop pivot.
 - Prop acceleration and yaw inertia scale with a capped, volume-derived mass estimate; authored material mass is unavailable.
+- Rust server and Fabric client state-v11 codecs share a golden payload fixture, with byte-for-byte round-trip and legacy v10 prop decoding checks.
 - Frame-consistent prop rendering with one sampled transform per instance per render frame.
 - Fabric client controls, board/skater presentation, and map rendering.
 - Portable PEX WebAssembly plugin and Windows ISO conversion/setup helper.

@@ -11,6 +11,7 @@ base {
 }
 
 repositories {
+    mavenCentral()
     maven { url = 'https://libraries.minecraft.net/' }
 }
 
@@ -29,6 +30,19 @@ dependencies {
     compileOnly "org.lwjgl:lwjgl-sdl:3.4.3"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.12.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
+}
+
+sourceSets.test.compileClasspath += sourceSets.client.output + sourceSets.client.compileClasspath
+sourceSets.test.runtimeClasspath += sourceSets.client.output + sourceSets.client.runtimeClasspath
+
+tasks.named('compileTestJava') {
+    dependsOn tasks.named('compileClientJava')
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
 }
 
 def modVersion = project.version.toString()
