@@ -21,7 +21,8 @@ use pumpkin_plugin_api::{
     text::TextComponent,
 };
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -50,6 +51,7 @@ struct ServerState {
     controls: HashMap<String, Controls>,
     control_updated_at: HashMap<String, Instant>,
     sessions: HashMap<String, SkateSession>,
+    map_backed: HashSet<String>,
     pending_loads: HashSet<String>,
     pending_initial_scans: HashMap<String, PendingSkateLoad>,
     engine_accumulator: HashMap<String, f32>,
@@ -212,12 +214,79 @@ impl CommandHandler for ToggleSkate {
             );
             sender.send_message(TextComponent::text("PEX Skate mode disabled."));
         } else {
-            if DATA_ROOT.get().is_none() {
+            let Some(data_root) = DATA_ROOT.get() else {
                 clear_pending_load(&name);
                 sender.send_message(TextComponent::text(
                     "Skate Engine data folder is unavailable.",
                 ));
                 return Ok(0);
+            };
+            match default_skate_map_path(data_root) {
+                Ok(Some(map_path)) => {
+                    let session = match SkateSession::load_skate_map(data_root, &map_path) {
+                        Ok(session) => session,
+                        Err(error) => {
+                            clear_pending_load(&name);
+                            sender.send_message(TextComponent::text(&format!(
+                                "Could not load Skate map {}: {error}",
+                                map_path.file_name().unwrap_or_default().to_string_lossy()
+                            )));
+                            return Ok(0);
+                        }
+                    };
+                    let mut session = session;
+                    let mut pose = session.pose();
+                    pose.visual = session.skeletal_pose();
+                    let root = (
+                        f64::from(pose.root[0]),
+                        f64::from(pose.root[1]),
+                        f64::from(pose.root[2]),
+                    );
+                    let now = Instant::now();
+                    let Ok(mut state) = server_state().lock() else {
+                        clear_pending_load(&name);
+                        sender
+                            .send_message(TextComponent::text("Skate mode state is unavailable."));
+                        return Ok(0);
+                    };
+                    if !state.pending_loads.remove(&name) {
+                        return Ok(0);
+                    }
+                    state.pending_initial_scans.remove(&name);
+                    state.enabled.insert(name.clone());
+                    state.map_backed.insert(name.clone());
+                    state.controls.insert(name.clone(), Controls::default());
+                    state.control_updated_at.insert(name.clone(), now);
+                    state.sessions.insert(name.clone(), session);
+                    state.engine_accumulator.insert(name.clone(), 0.0);
+                    state.engine_updated_at.insert(name.clone(), now);
+                    state.last_broadcast_at.insert(name.clone(), now);
+                    state
+                        .collision_center
+                        .insert(name.clone(), (root.0 as f32, root.1 as f32, root.2 as f32));
+                    drop(state);
+                    let world = player.as_entity().get_world();
+                    player.teleport(
+                        root,
+                        Some(player.get_yaw()),
+                        Some(player.get_pitch()),
+                        world,
+                    );
+                    broadcast_pose(&server, player.as_entity().get_id(), &pose, true);
+                    sender.send_message(TextComponent::text(&format!(
+                        "Skate 3 Engine mode enabled on {}.",
+                        map_path.file_stem().unwrap_or_default().to_string_lossy()
+                    )));
+                    return Ok(0);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    clear_pending_load(&name);
+                    sender.send_message(TextComponent::text(&format!(
+                        "Could not select an installed Skate map: {error}"
+                    )));
+                    return Ok(0);
+                }
             }
             let position = player.get_position();
             let spawn = [position.0 as f32, position.1 as f32, position.2 as f32];
@@ -247,11 +316,13 @@ fn clear_skate_state(state: &mut ServerState, name: &str) -> bool {
     let had_skate_state = state.enabled.contains(name)
         || state.pending_loads.contains(name)
         || state.pending_initial_scans.contains_key(name)
-        || state.sessions.contains_key(name);
+        || state.sessions.contains_key(name)
+        || state.map_backed.contains(name);
     state.enabled.remove(name);
     state.controls.remove(name);
     state.control_updated_at.remove(name);
     state.sessions.remove(name);
+    state.map_backed.remove(name);
     state.pending_loads.remove(name);
     state.pending_initial_scans.remove(name);
     state.engine_accumulator.remove(name);
@@ -267,6 +338,81 @@ fn clear_pending_load(name: &str) {
         state.pending_loads.remove(name);
         state.pending_initial_scans.remove(name);
     }
+}
+
+/// Select a converted map deterministically. An optional settings/default-map.txt
+/// may name a map filename; otherwise prefer the main University district and
+/// then the first package in case-insensitive filename order.
+fn default_skate_map_path(data_root: &Path) -> Result<Option<PathBuf>, String> {
+    let maps_root = data_root.join("maps");
+    let entries = match std::fs::read_dir(&maps_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("could not read {}: {error}", maps_root.display())),
+    };
+    let mut maps = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("could not inspect installed maps: {error}"))?;
+        let kind = entry
+            .file_type()
+            .map_err(|error| format!("could not inspect {}: {error}", entry.path().display()))?;
+        if kind.is_file()
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("skate"))
+        {
+            maps.push(entry.path());
+        }
+    }
+    maps.sort_by_key(|path| {
+        path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase()
+    });
+    if maps.is_empty() {
+        return Ok(None);
+    }
+
+    let selection_path = data_root.join("settings").join("default-map.txt");
+    match std::fs::read_to_string(&selection_path) {
+        Ok(selection) => {
+            let selection = selection.trim();
+            if !selection.is_empty() {
+                let filename = Path::new(selection).file_name();
+                if Path::new(selection).components().count() != 1 || filename.is_none() {
+                    return Err(format!(
+                        "{} must contain a single map filename",
+                        selection_path.display()
+                    ));
+                }
+                let selected = maps.iter().find(|path| {
+                    path.file_name()
+                        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(selection))
+                });
+                return selected
+                    .cloned()
+                    .map(Some)
+                    .ok_or_else(|| format!("{} is not installed in maps/", selection));
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "could not read {}: {error}",
+                selection_path.display()
+            ));
+        }
+    }
+    Ok(maps
+        .iter()
+        .find(|path| {
+            path.file_stem()
+                .is_some_and(|stem| stem.to_string_lossy().eq_ignore_ascii_case("University"))
+        })
+        .cloned()
+        .or_else(|| maps.into_iter().next()))
 }
 
 struct SkateInput;
@@ -667,7 +813,8 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             pose.root[1],
             pose.root[2],
         ));
-        let should_refresh_collision = collision_refresh_needed(center, pose.root);
+        let should_refresh_collision =
+            should_refresh_collision(state.map_backed.contains(name), center, pose.root);
         let should_broadcast = state
             .last_broadcast_at
             .get(name)
@@ -803,6 +950,10 @@ fn collision_refresh_needed(center: (f32, f32, f32), root: [f32; 3]) -> bool {
     let dz = root[2] - center.2;
     dx * dx + dz * dz >= COLLISION_REFRESH_DISTANCE * COLLISION_REFRESH_DISTANCE
         || dy.abs() >= COLLISION_REFRESH_VERTICAL_DISTANCE
+}
+
+fn should_refresh_collision(map_backed: bool, center: (f32, f32, f32), root: [f32; 3]) -> bool {
+    !map_backed && collision_refresh_needed(center, root)
 }
 
 fn initial_scan_recenter_needed(center: (f32, f32, f32), position: (f32, f32, f32)) -> bool {
@@ -948,7 +1099,7 @@ mod integration_tests {
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, ServerState,
         append_visual, clear_skate_state, collision::CollisionScan, collision_refresh_needed,
         collision_work_order, engine, initial_scan_recenter_needed, physics::Controls,
-        supports_client_protocol, take_collision_budget,
+        should_refresh_collision, supports_client_protocol, take_collision_budget,
     };
     use std::time::{Duration, Instant};
 
@@ -1007,6 +1158,39 @@ mod integration_tests {
         let center = (0.0, 64.0, 0.0);
         assert!(!collision_refresh_needed(center, [7.99, 64.0, 0.0]));
         assert!(collision_refresh_needed(center, [8.0, 64.0, 0.0]));
+    }
+
+    #[test]
+    fn authored_map_collision_is_not_replaced_with_minecraft_blocks() {
+        let center = (0.0, 64.0, 0.0);
+        assert!(!should_refresh_collision(true, center, [64.0, 64.0, 0.0]));
+        assert!(should_refresh_collision(false, center, [8.0, 64.0, 0.0]));
+    }
+
+    #[test]
+    fn map_selection_prefers_university_and_honors_safe_filename_override() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("pex-skate-map-selection-{nonce}"));
+        let maps = root.join("maps");
+        std::fs::create_dir_all(&maps).unwrap();
+        std::fs::write(maps.join("Mega Park.skate"), b"map").unwrap();
+        std::fs::write(maps.join("University.skate"), b"map").unwrap();
+        assert_eq!(
+            super::default_skate_map_path(&root).unwrap(),
+            Some(maps.join("University.skate"))
+        );
+        std::fs::create_dir_all(root.join("settings")).unwrap();
+        std::fs::write(root.join("settings/default-map.txt"), "Mega Park.skate\n").unwrap();
+        assert_eq!(
+            super::default_skate_map_path(&root).unwrap(),
+            Some(maps.join("Mega Park.skate"))
+        );
+        std::fs::write(root.join("settings/default-map.txt"), "../outside.skate\n").unwrap();
+        assert!(super::default_skate_map_path(&root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

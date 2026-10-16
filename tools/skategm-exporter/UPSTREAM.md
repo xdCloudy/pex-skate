@@ -4,4 +4,4 @@ This directory vendors SkateGM's exporter from [`the-schwilliam/SkateGM`](https:
 
 The exporter is GPL-3.0. Vendored component notices and licenses are retained in `tools/`; the repository's GPL-3.0 license applies to the adapted installer scripts too. See the project root's `LICENSE` and `LICENSE-THIRD-PARTY.md` for attribution and third-party license details.
 
-PEX Skate invokes the upstream converter with its ISO-to-assets path, then installs the generated `assets` directory into the operator-selected PEX plugin data directory. Conversion occurs on the operator's Windows machine. No game data is uploaded or included in release artifacts.
+PEX Skate adapts SkateGM's existing retail district conversion to produce `SKATE14` packages. The setup helper validates each package by constructing a gameplay session with the Rust host, then installs `assets/private/`, `maps/`, and `maps.json` into the operator-selected PEX data folder. Conversion occurs on the operator's Windows machine. No game data is uploaded or included in release artifacts.

@@ -12,6 +12,8 @@ Writes <folder>/assets on success; progress lines go to stdout.
 """
 from pathlib import Path
 import argparse, runpy, shutil, sys, tempfile, traceback
+import subprocess
+import json
 
 ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT))
@@ -52,6 +54,10 @@ def convert(xex, out):
             print('Reading the files it needs from your disc image', flush=True)
             try:
                 xiso.extract_files(xex, FROM_DISC, disc, lambda text: print(text, flush=True))
+                xiso.extract_matching(
+                    xex, 'data/content', 'worldDIST_*.big', disc,
+                    lambda text: print(text, flush=True),
+                )
             except xiso.XisoError as error:
                 raise RuntimeError(f'{xex.name}: {error}. Is this a Skate 3 (Xbox 360) disc image?')
             return convert_game(Path(disc), out)
@@ -77,6 +83,29 @@ def prepare_hud(xex, data):
             xiso.extract_files(xex, HUD, disc, lambda text: print(text, flush=True))
             return run(Path(disc))
     return run(xex.parent)
+
+
+def map_checker_executable():
+    if getattr(sys, 'frozen', False):
+        executable = Path(sys._MEIPASS) / 'tools' / ('pex-skate-map-check.exe' if sys.platform == 'win32' else 'pex-skate-map-check')
+        if not executable.is_file():
+            raise RuntimeError('The bundled PEX Skate map validator is missing.')
+        return executable
+
+    repository = ROOT.parents[1]
+    executable = repository / 'target' / 'release' / (
+        'pex-skate-map-check.exe' if sys.platform == 'win32' else 'pex-skate-map-check'
+    )
+    if not executable.is_file():
+        print('Building the PEX Skate map validator', flush=True)
+        subprocess.run(
+            ['cargo', 'build', '--locked', '--release', '--bin', 'pex-skate-map-check'],
+            cwd=repository,
+            check=True,
+        )
+    if not executable.is_file():
+        raise RuntimeError('Cargo completed without producing the PEX Skate map validator.')
+    return executable
 
 
 SOUNDS = ['data/audio/audiofiles.big', 'data/audio/grains.big']
@@ -151,11 +180,39 @@ def convert_game(game, out):
             except Exception as error:
                 report("Skate 3's trick display was skipped: " + (str(error) or type(error).__name__))
 
+        content = game / 'data/content'
+        archives = sorted(
+            (
+                path for path in content.iterdir()
+                if path.is_file()
+                and path.name.casefold().startswith('worlddist_')
+                and path.suffix.casefold() == '.big'
+            ),
+            key=lambda path: (path.name.casefold() != 'worlddist_university.big', path.name.casefold()),
+        ) if content.is_dir() else []
+        if not archives:
+            raise RuntimeError('No Skate 3 worldDIST_*.big map archives were found in data/content.')
+        report(f'Converting {len(archives)} Skate 3 map archives')
+        from tools.asset_pipeline.install import convert_map
+        maps_dir = stage / 'maps'
+        maps_dir.mkdir(parents=True, exist_ok=True)
+        checker = map_checker_executable()
+        map_catalog = []
+        for index, archive in enumerate(archives, start=1):
+            report(f'Converting map {index}/{len(archives)}: {archive.stem}')
+            entry = convert_map(archive, work / 'maps', maps_dir, stage, checker, log, report)
+            map_catalog.append(entry)
+        (stage / 'maps.json').write_text(
+            json.dumps(map_catalog, indent=2), encoding='utf-8'
+        )
+
     assets = stage / 'assets'
     for needed in ('private/skater.glb', 'private/game.json', 'private/stock/physics-skeletons.json',
                    'private/stock/skater-collections.json'):
         if not (assets / needed).is_file():
             raise RuntimeError(f'Conversion finished without {needed}.')
+    if not list((stage / 'maps').glob('*.skate')):
+        raise RuntimeError('Conversion finished without a playable Skate map package.')
     shutil.rmtree(out, ignore_errors=True)
     stage.rename(out)
     report('Skate 3 data ready')

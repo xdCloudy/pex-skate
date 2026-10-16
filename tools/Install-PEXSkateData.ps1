@@ -28,6 +28,7 @@ $dataPath = if ($folderPicker.ShowDialog() -eq [System.Windows.Forms.DialogResul
     $null
 }
 $privatePath = if ($dataPath) { Join-Path $dataPath "private" } else { $null }
+$mapsPath = if ($dataPath) { Join-Path $dataPath "maps" } else { $null }
 
 $clientConfigPath = $null
 $clientFolderPicker = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -54,10 +55,15 @@ $clientModelPath = if ($clientConfigPath) {
 } else {
     $null
 }
+$clientMapsPath = if ($clientConfigPath) {
+    Join-Path $clientConfigPath "pex-skate\maps"
+} else {
+    $null
+}
 
-if ($privatePath -and (Test-Path -LiteralPath $privatePath)) {
+if ($dataPath -and ((Test-Path -LiteralPath $privatePath) -or (Test-Path -LiteralPath $mapsPath))) {
     $answer = [System.Windows.Forms.MessageBox]::Show(
-        "The selected PEX Skate data folder already has converted assets. Replace those assets with a fresh conversion? Other files in the folder will be kept.",
+        "The selected PEX Skate data folder already has converted assets or maps. Replace them with a fresh conversion? Other files in the folder will be kept.",
         "Replace converted assets?",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -67,9 +73,12 @@ if ($privatePath -and (Test-Path -LiteralPath $privatePath)) {
 
 $stagePath = Join-Path ([System.IO.Path]::GetTempPath()) ("pex-skate-import-" + [guid]::NewGuid().ToString("N"))
 $backupPath = $null
+$mapsManifestBackupPath = $null
 if ($dataPath) {
     New-Item -ItemType Directory -Force -Path $dataPath | Out-Null
     $backupPath = Join-Path $dataPath ("private.previous-" + [guid]::NewGuid().ToString("N"))
+    $mapsBackupPath = Join-Path $dataPath ("maps.previous-" + [guid]::NewGuid().ToString("N"))
+    $mapsManifestBackupPath = Join-Path $dataPath ("maps.json.previous-" + [guid]::NewGuid().ToString("N"))
 }
 try {
     Write-Host "Converting the selected ISO locally. This can take several minutes."
@@ -89,29 +98,69 @@ try {
             throw "Conversion did not produce the required asset $relative. Nothing was installed."
         }
     }
+    $mapManifestPath = Join-Path $stagePath "maps.json"
+    if (-not (Test-Path -LiteralPath $mapManifestPath -PathType Leaf)) {
+        throw "Conversion did not produce maps.json. Nothing was installed."
+    }
+    $mapEntries = @(Get-Content -LiteralPath $mapManifestPath -Raw | ConvertFrom-Json)
+    if ($mapEntries.Count -eq 0) {
+        throw "Conversion did not produce any playable Skate map packages. Nothing was installed."
+    }
+    foreach ($entry in $mapEntries) {
+        if ($entry.path -notmatch '^maps/[A-Za-z0-9._-]+\.skate$') {
+            throw "Conversion produced an unsafe map path: $($entry.path)"
+        }
+        $relativeMap = $entry.path.Replace('/', [IO.Path]::DirectorySeparatorChar)
+        $sourceMap = Join-Path $stagePath $relativeMap
+        if (-not (Test-Path -LiteralPath $sourceMap -PathType Leaf)) {
+            throw "Conversion did not produce $($entry.path). Nothing was installed."
+        }
+        $actualHash = (Get-FileHash -LiteralPath $sourceMap -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $entry.sha256) {
+            throw "Converted map hash does not match maps.json: $($entry.path)"
+        }
+    }
 
     $serverDataMessage = "Server data not installed (client-only setup)."
     $modelSourcePath = Join-Path $stagePath "assets\private\skater.glb"
     if ($dataPath) {
-        if (Test-Path -LiteralPath $privatePath) {
-            Move-Item -LiteralPath $privatePath -Destination $backupPath
-        }
+        $hadPrivate = Test-Path -LiteralPath $privatePath
+        $hadMaps = Test-Path -LiteralPath $mapsPath
+        $mapsManifestPath = Join-Path $dataPath "maps.json"
+        $hadMapsManifest = Test-Path -LiteralPath $mapsManifestPath
         try {
+            if ($hadPrivate) { Move-Item -LiteralPath $privatePath -Destination $backupPath }
+            if ($hadMaps) { Move-Item -LiteralPath $mapsPath -Destination $mapsBackupPath }
+            if ($hadMapsManifest) { Move-Item -LiteralPath $mapsManifestPath -Destination $mapsManifestBackupPath }
             Move-Item -LiteralPath (Join-Path $stagePath "assets\private") -Destination $privatePath
+            Move-Item -LiteralPath (Join-Path $stagePath "maps") -Destination $mapsPath
+            Move-Item -LiteralPath $mapManifestPath -Destination $mapsManifestPath
+            Copy-Item -LiteralPath (Join-Path $stagePath "conversion.log") -Destination (Join-Path $dataPath "conversion.log") -Force
         } catch {
-            if (Test-Path -LiteralPath $backupPath) {
-                Move-Item -LiteralPath $backupPath -Destination $privatePath
-            }
+            if (Test-Path -LiteralPath $privatePath) { Remove-Item -LiteralPath $privatePath -Recurse -Force }
+            if (Test-Path -LiteralPath $mapsPath) { Remove-Item -LiteralPath $mapsPath -Recurse -Force }
+            if (Test-Path -LiteralPath $mapsManifestPath) { Remove-Item -LiteralPath $mapsManifestPath -Force }
+            if (Test-Path -LiteralPath $backupPath) { Move-Item -LiteralPath $backupPath -Destination $privatePath }
+            if (Test-Path -LiteralPath $mapsBackupPath) { Move-Item -LiteralPath $mapsBackupPath -Destination $mapsPath }
+            if (Test-Path -LiteralPath $mapsManifestBackupPath) { Move-Item -LiteralPath $mapsManifestBackupPath -Destination $mapsManifestPath }
             throw
         }
-        Copy-Item -LiteralPath (Join-Path $stagePath "conversion.log") -Destination (Join-Path $dataPath "conversion.log") -Force
         if (Test-Path -LiteralPath $backupPath) {
             $resolvedBackup = (Resolve-Path -LiteralPath $backupPath).Path
             if ([System.IO.Path]::GetDirectoryName($resolvedBackup) -eq $dataPath) {
                 Remove-Item -LiteralPath $resolvedBackup -Recurse -Force
             }
         }
-        $serverDataMessage = "Server data installed: $dataPath"
+        if (Test-Path -LiteralPath $mapsBackupPath) {
+            $resolvedMapsBackup = (Resolve-Path -LiteralPath $mapsBackupPath).Path
+            if ([System.IO.Path]::GetDirectoryName($resolvedMapsBackup) -eq $dataPath) {
+                Remove-Item -LiteralPath $resolvedMapsBackup -Recurse -Force
+            }
+        }
+        if (Test-Path -LiteralPath $mapsManifestBackupPath) {
+            Remove-Item -LiteralPath $mapsManifestBackupPath -Force
+        }
+        $serverDataMessage = "Server data and $( $mapEntries.Count ) converted map(s) installed: $dataPath"
         $modelSourcePath = Join-Path $privatePath "skater.glb"
     }
 
@@ -145,6 +194,47 @@ try {
             }
         } else {
             $clientModelMessage = "Existing client model kept."
+        }
+    }
+
+    if ($clientMapsPath) {
+        $replaceClientMaps = $true
+        if (Test-Path -LiteralPath $clientMapsPath -PathType Container) {
+            $answer = [System.Windows.Forms.MessageBox]::Show(
+                "Replace the existing local PEX Skate map packages?",
+                "Replace client maps?",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            $replaceClientMaps = $answer -eq [System.Windows.Forms.DialogResult]::Yes
+        }
+        if ($replaceClientMaps) {
+            $clientMapParent = Split-Path -Parent $clientMapsPath
+            $temporaryMapsPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".tmp")
+            $oldMapsPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".previous")
+            try {
+                New-Item -ItemType Directory -Force -Path $clientMapParent | Out-Null
+                $mapsSource = if ($dataPath) { $mapsPath } else { Join-Path $stagePath "maps" }
+                Copy-Item -LiteralPath $mapsSource -Destination $temporaryMapsPath -Recurse
+                if (Test-Path -LiteralPath $clientMapsPath) {
+                    Move-Item -LiteralPath $clientMapsPath -Destination $oldMapsPath
+                }
+                Move-Item -LiteralPath $temporaryMapsPath -Destination $clientMapsPath
+                if (Test-Path -LiteralPath $oldMapsPath) {
+                    Remove-Item -LiteralPath $oldMapsPath -Recurse -Force
+                }
+                $clientModelMessage += "`r`nClient map packages installed: $clientMapsPath"
+            } catch {
+                if (Test-Path -LiteralPath $clientMapsPath) { Remove-Item -LiteralPath $clientMapsPath -Recurse -Force }
+                if (Test-Path -LiteralPath $oldMapsPath) { Move-Item -LiteralPath $oldMapsPath -Destination $clientMapsPath }
+                $clientModelMessage += "`r`nClient map copy failed: $($_.Exception.Message)"
+            } finally {
+                if (Test-Path -LiteralPath $temporaryMapsPath) {
+                    Remove-Item -LiteralPath $temporaryMapsPath -Recurse -Force
+                }
+            }
+        } else {
+            $clientModelMessage += "`r`nExisting client maps kept."
         }
     }
 

@@ -1,29 +1,34 @@
 # Skate 3 data exporter
 
-Turns a player's own Skate 3 (Xbox 360) ISO or extracted game folder into the data
-folder the gm_skategm module reads (`<out>/assets`, holding `private/`): animation
-banks, state graphs, input and physics settings, the skater collections and
-physics skeletons, and the skater model.
+Turns a player's own Skate 3 (Xbox 360) ISO or extracted game folder into PEX
+data: gameplay and character files under `<out>/assets/private/`, plus retail
+district packages under `<out>/maps/` and a `<out>/maps.json` catalog. Map files
+use the engine's portable `SKATE14` format and include render geometry, textures,
+retail collision and authored grind splines.
 
-The ISO mode reads the required files from the disc image into a temporary
-folder, converts them, then removes that temporary extraction. The XDVDFS
+The ISO mode reads the required files and `data/content/worldDIST_*.big` map
+archives from the disc image into a temporary folder, converts them, then removes
+that temporary extraction. The XDVDFS
 reader checks image extents, rejects unsafe filenames, and bounds directory
 size/depth before extracting. Nothing is downloaded by the exporter and no game
 files are included here.
 
 ## Use
 
-From source (Python 3.13+, `pip install numpy Pillow`):
+From source (Python 3.13+, NumPy, Pillow, and Rust stable on `PATH`):
 
 ```
 python tools/skategm-exporter/convert.py --xex "D:/Games/Skate 3.iso" --out C:/pex-skate-data
 ```
 
 `--xex` accepts either a dumped Xbox 360 ISO or `default.xex` beside the game's
-`data/` folder. The ISO path extracts only the required disc paths into a
-temporary folder, not a full copy. Copy `<out>/assets/private/` to the PEX
-Skate plugin data folder after conversion. Progress goes to the console and
-the generated `<out>/conversion.log`. For speed, build the native RefPack
+`data/` folder. The ISO path extracts only the required disc paths and world
+archives into a temporary folder, not a full disc copy. Copy `<out>/assets/private/`
+to `<plugin-data>/private/`, then copy `<out>/maps/` and `maps.json` into the PEX
+plugin data folder. Progress goes to the console and `<out>/conversion.log`.
+The converter builds `pex-skate-map-check` and constructs a gameplay session for
+each generated district to validate its map, retail collision and rails. For
+speed, build the native RefPack
 decoder first (otherwise a slower Python decoder is used):
 
 ```

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from xiso import DIRECTORY, MAGIC, SECTOR, Xiso, XisoError
+from xiso import DIRECTORY, MAGIC, SECTOR, Xiso, XisoError, extract_matching
 
 
 def make_entry(name, sector, size, attributes=0):
@@ -46,6 +46,21 @@ class XisoTests(unittest.TestCase):
             disc.extract("payload.bin", output)
 
         self.assertEqual(output.read_bytes(), b"skate")
+
+    def test_extract_matching_selects_case_insensitive_direct_children(self):
+        self.write_image([
+            make_entry("worldDIST_University.big", 41, 5),
+            make_entry("readme.txt", 41, 5),
+        ])
+        output = Path(self.temp.name) / "out"
+        files = extract_matching(self.image_path, "", "worlddist_*.BIG", output)
+        self.assertEqual(files, ["worldDIST_University.big"])
+        self.assertEqual((output / "worldDIST_University.big").read_bytes(), b"skate")
+
+    def test_extract_matching_reports_missing_patterns(self):
+        self.write_image([make_entry("readme.txt", 41, 5)])
+        with self.assertRaisesRegex(XisoError, "no files matching"):
+            extract_matching(self.image_path, "", "worldDIST_*.big", self.temp.name)
 
     def test_rejects_path_traversal_names(self):
         self.write_image([make_entry("../outside", 41, 5)])

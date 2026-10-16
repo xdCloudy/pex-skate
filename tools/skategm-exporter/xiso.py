@@ -9,6 +9,7 @@ folder. Handles plain (extract-xiso rebuilt) images and full disc dumps
 import os
 import struct
 import sys
+import fnmatch
 
 SECTOR = 2048
 MAGIC = b"MICROSOFT*XBOX*MEDIA"
@@ -205,6 +206,34 @@ def extract_files(iso, paths, destination, report=None):
         for p, _ in files:
             disc.extract(p, os.path.join(destination, *p.split("/")), progress)
         return [p for p, _ in files]
+
+
+def extract_matching(iso, directory, pattern, destination, report=None):
+    """Extract direct children matching a case-insensitive filename glob."""
+    destination = os.fspath(destination)
+    directory = directory.strip("/\\")
+    with Xiso(iso) as disc:
+        files = [
+            (path, size)
+            for path, size in disc.walk(directory)
+            if path.rpartition("/")[0].casefold() == directory.casefold()
+            and fnmatch.fnmatchcase(path.rpartition("/")[2].casefold(), pattern.casefold())
+        ]
+        if not files:
+            raise XisoError(f"no files matching {pattern!r} in {directory!r}")
+        total = sum(size for _, size in files) or 1
+        done = [0, -1]
+
+        def progress(count):
+            done[0] += count
+            percent = done[0] * 100 // total
+            if report and percent // 10 != done[1]:
+                done[1] = percent // 10
+                report("Reading map archives from the disc image: %d%%" % percent)
+
+        for path, _ in files:
+            disc.extract(path, os.path.join(destination, *path.split("/")), progress)
+        return [path for path, _ in files]
 
 
 def main():

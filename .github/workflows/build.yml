@@ -76,12 +76,12 @@ jobs:
           $package = Join-Path $env:GITHUB_WORKSPACE "setup-package"
           New-Item -ItemType Directory -Force -Path $package | Out-Null
           Copy-Item "$env:GITHUB_WORKSPACE\setup-build\skategm-convert.exe" $package
+          Copy-Item "$env:GITHUB_WORKSPACE\setup-build\skategm-exporter-source.zip" $package
           Copy-Item tools/Install-PEXSkateData.ps1 $package
           Copy-Item tools/Install-PEXSkateData.bat $package
           Copy-Item LICENSE $package
           Copy-Item tools/skategm-exporter/LICENSE-THIRD-PARTY.md $package
           Copy-Item tools/skategm-exporter/UPSTREAM.md $package
-          Compress-Archive -Path tools/skategm-exporter/* -DestinationPath (Join-Path $package "skategm-exporter-source.zip")
           $hashes = @("skategm-convert.exe", "skategm-exporter-source.zip") | ForEach-Object {
             $hash = (Get-FileHash -LiteralPath (Join-Path $package $_) -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $_"
