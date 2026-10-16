@@ -11,7 +11,10 @@ use pumpkin_plugin_api::{
     commands::CommandHandler,
     events::{
         EventHandler, EventPriority,
-        player::{PlayerCustomPayloadEvent, PlayerMoveEvent},
+        entity::PlayerDeathEvent,
+        player::{
+            PlayerChangedWorldEvent, PlayerCustomPayloadEvent, PlayerMoveEvent, PlayerRespawnEvent,
+        },
         server::ServerTickEndEvent,
     },
     permissions,
@@ -133,6 +136,27 @@ impl Plugin for PexSkate {
                 false,
             )
             .map_err(|error| format!("could not register player cleanup handler: {error}"))?;
+        context
+            .register_event_handler::<PlayerDeathEvent, _>(
+                SkatePlayerDeath,
+                EventPriority::Lowest,
+                false,
+            )
+            .map_err(|error| format!("could not register player death handler: {error}"))?;
+        context
+            .register_event_handler::<PlayerRespawnEvent, _>(
+                SkatePlayerRespawn,
+                EventPriority::Normal,
+                false,
+            )
+            .map_err(|error| format!("could not register player respawn handler: {error}"))?;
+        context
+            .register_event_handler::<PlayerChangedWorldEvent, _>(
+                SkatePlayerChangedWorld,
+                EventPriority::Normal,
+                false,
+            )
+            .map_err(|error| format!("could not register world change handler: {error}"))?;
         Ok(())
     }
 }
@@ -159,17 +183,8 @@ impl CommandHandler for ToggleSkate {
                     TextComponent::text("Skate mode state is unavailable."),
                 ));
             };
-            if state.enabled.remove(&name) {
-                state.controls.remove(&name);
-                state.control_updated_at.remove(&name);
-                state.sessions.remove(&name);
-                state.pending_loads.remove(&name);
-                state.pending_initial_scans.remove(&name);
-                state.engine_accumulator.remove(&name);
-                state.engine_updated_at.remove(&name);
-                state.last_broadcast_at.remove(&name);
-                state.collision_center.remove(&name);
-                state.collision_scans.remove(&name);
+            if state.enabled.contains(&name) {
+                clear_skate_state(&mut state, &name);
                 true
             } else if !state.compatible_clients.contains(&name) {
                 sender.send_message(TextComponent::text(
@@ -226,6 +241,25 @@ impl CommandHandler for ToggleSkate {
         }
         Ok(0)
     }
+}
+
+fn clear_skate_state(state: &mut ServerState, name: &str) -> bool {
+    let had_skate_state = state.enabled.contains(name)
+        || state.pending_loads.contains(name)
+        || state.pending_initial_scans.contains_key(name)
+        || state.sessions.contains_key(name);
+    state.enabled.remove(name);
+    state.controls.remove(name);
+    state.control_updated_at.remove(name);
+    state.sessions.remove(name);
+    state.pending_loads.remove(name);
+    state.pending_initial_scans.remove(name);
+    state.engine_accumulator.remove(name);
+    state.engine_updated_at.remove(name);
+    state.last_broadcast_at.remove(name);
+    state.collision_center.remove(name);
+    state.collision_scans.remove(name);
+    had_skate_state
 }
 
 fn clear_pending_load(name: &str) {
@@ -287,20 +321,71 @@ impl EventHandler<pumpkin_plugin_api::events::player::PlayerLeaveEvent> for Skat
         let yaw = event.player.get_yaw();
         if let Ok(mut state) = server_state().lock() {
             state.compatible_clients.remove(&name);
-            state.enabled.remove(&name);
-            state.controls.remove(&name);
-            state.control_updated_at.remove(&name);
-            state.sessions.remove(&name);
-            state.pending_loads.remove(&name);
-            state.pending_initial_scans.remove(&name);
-            state.engine_accumulator.remove(&name);
-            state.engine_updated_at.remove(&name);
-            state.last_broadcast_at.remove(&name);
-            state.collision_center.remove(&name);
-            state.collision_scans.remove(&name);
+            clear_skate_state(&mut state, &name);
         }
         broadcast_state(&server, entity_id, position, yaw, 0.0, false);
         event
+    }
+}
+
+struct SkatePlayerDeath;
+
+impl EventHandler<PlayerDeathEvent> for SkatePlayerDeath {
+    fn handle(
+        &self,
+        server: Server,
+        event: pumpkin_plugin_api::events::EventData<PlayerDeathEvent>,
+    ) -> pumpkin_plugin_api::events::EventData<PlayerDeathEvent> {
+        if !event.cancelled {
+            stop_skate_for_lifecycle_event(&server, &event.player);
+        }
+        event
+    }
+}
+
+struct SkatePlayerRespawn;
+
+impl EventHandler<PlayerRespawnEvent> for SkatePlayerRespawn {
+    fn handle(
+        &self,
+        server: Server,
+        event: pumpkin_plugin_api::events::EventData<PlayerRespawnEvent>,
+    ) -> pumpkin_plugin_api::events::EventData<PlayerRespawnEvent> {
+        stop_skate_for_lifecycle_event(&server, &event.player);
+        event
+    }
+}
+
+struct SkatePlayerChangedWorld;
+
+impl EventHandler<PlayerChangedWorldEvent> for SkatePlayerChangedWorld {
+    fn handle(
+        &self,
+        server: Server,
+        event: pumpkin_plugin_api::events::EventData<PlayerChangedWorldEvent>,
+    ) -> pumpkin_plugin_api::events::EventData<PlayerChangedWorldEvent> {
+        if !event.cancelled {
+            stop_skate_for_lifecycle_event(&server, &event.player);
+        }
+        event
+    }
+}
+
+fn stop_skate_for_lifecycle_event(server: &Server, player: &pumpkin_plugin_api::Player) {
+    let name = player.get_name();
+    let stopped = server_state()
+        .lock()
+        .map(|mut state| clear_skate_state(&mut state, &name))
+        .unwrap_or(false);
+    if stopped {
+        broadcast_state(
+            server,
+            player.as_entity().get_id(),
+            player.get_position(),
+            player.get_yaw(),
+            0.0,
+            false,
+        );
     }
 }
 
@@ -563,15 +648,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             remaining = remaining.min(period);
         }
         if let Some(error) = failure {
-            state.sessions.remove(name);
-            state.enabled.remove(name);
-            state.controls.remove(name);
-            state.control_updated_at.remove(name);
-            state.engine_accumulator.remove(name);
-            state.engine_updated_at.remove(name);
-            state.last_broadcast_at.remove(name);
-            state.collision_center.remove(name);
-            state.collision_scans.remove(name);
+            clear_skate_state(&mut state, name);
             drop(state);
             let entity_id = player.as_entity().get_id();
             let position = player.get_position();
@@ -701,15 +778,7 @@ fn stop_skate_for_player(
     error: String,
 ) {
     if let Ok(mut state) = server_state().lock() {
-        state.enabled.remove(name);
-        state.sessions.remove(name);
-        state.controls.remove(name);
-        state.control_updated_at.remove(name);
-        state.engine_accumulator.remove(name);
-        state.engine_updated_at.remove(name);
-        state.last_broadcast_at.remove(name);
-        state.collision_center.remove(name);
-        state.collision_scans.remove(name);
+        clear_skate_state(&mut state, name);
     }
     let position = player.get_position();
     player.send_system_message(
@@ -876,9 +945,10 @@ pumpkin_plugin_api::register_plugin!(PexSkate);
 mod integration_tests {
     use super::{
         CLIENT_PROTOCOL_VERSION, COLLISION_BLOCKS_GLOBAL_PER_TICK, COLLISION_BLOCKS_PER_TICK,
-        COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, ServerState, append_visual,
-        collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
-        physics::Controls, supports_client_protocol, take_collision_budget,
+        COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, ServerState,
+        append_visual, clear_skate_state, collision::CollisionScan, collision_refresh_needed,
+        collision_work_order, engine, initial_scan_recenter_needed, physics::Controls,
+        supports_client_protocol, take_collision_budget,
     };
     use std::time::{Duration, Instant};
 
@@ -986,6 +1056,53 @@ mod integration_tests {
         assert!(!supports_client_protocol(&[2]));
         assert!(!supports_client_protocol(&[CLIENT_PROTOCOL_VERSION, 0]));
         assert!(!supports_client_protocol(&[]));
+    }
+
+    #[test]
+    fn lifecycle_cleanup_removes_active_and_pending_player_state() {
+        let mut state = ServerState::default();
+        state.compatible_clients.insert("rider".into());
+        state.enabled.insert("rider".into());
+        state.pending_loads.insert("rider".into());
+        state.pending_initial_scans.insert(
+            "rider".into(),
+            PendingSkateLoad {
+                scan: CollisionScan::new((0.0, 64.0, 0.0)),
+                spawn: [0.0, 64.0, 0.0],
+                heading: 0.0,
+            },
+        );
+        state.controls.insert("rider".into(), Controls::default());
+        state
+            .control_updated_at
+            .insert("rider".into(), Instant::now());
+        state.engine_accumulator.insert("rider".into(), 0.05);
+        state
+            .engine_updated_at
+            .insert("rider".into(), Instant::now());
+        state
+            .last_broadcast_at
+            .insert("rider".into(), Instant::now());
+        state
+            .collision_center
+            .insert("rider".into(), (0.0, 64.0, 0.0));
+        state
+            .collision_scans
+            .insert("rider".into(), CollisionScan::new((0.0, 64.0, 0.0)));
+
+        assert!(clear_skate_state(&mut state, "rider"));
+        assert!(!clear_skate_state(&mut state, "rider"));
+        assert!(state.compatible_clients.contains("rider"));
+        assert!(!state.enabled.contains("rider"));
+        assert!(!state.pending_loads.contains("rider"));
+        assert!(!state.pending_initial_scans.contains_key("rider"));
+        assert!(!state.controls.contains_key("rider"));
+        assert!(!state.control_updated_at.contains_key("rider"));
+        assert!(!state.engine_accumulator.contains_key("rider"));
+        assert!(!state.engine_updated_at.contains_key("rider"));
+        assert!(!state.last_broadcast_at.contains_key("rider"));
+        assert!(!state.collision_center.contains_key("rider"));
+        assert!(!state.collision_scans.contains_key("rider"));
     }
 
     #[test]
