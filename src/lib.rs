@@ -34,7 +34,7 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
-const CLIENT_PROTOCOL_VERSION: u8 = 2;
+const CLIENT_PROTOCOL_VERSION: u8 = 3;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -52,6 +52,7 @@ struct ServerState {
     control_updated_at: HashMap<String, Instant>,
     sessions: HashMap<String, SkateSession>,
     map_backed: HashSet<String>,
+    map_filenames: HashMap<String, String>,
     pending_loads: HashSet<String>,
     pending_initial_scans: HashMap<String, PendingSkateLoad>,
     engine_accumulator: HashMap<String, f32>,
@@ -255,6 +256,14 @@ impl CommandHandler for ToggleSkate {
                     state.pending_initial_scans.remove(&name);
                     state.enabled.insert(name.clone());
                     state.map_backed.insert(name.clone());
+                    let map_filename = map_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
+                    state
+                        .map_filenames
+                        .insert(name.clone(), map_filename.clone());
                     state.controls.insert(name.clone(), Controls::default());
                     state.control_updated_at.insert(name.clone(), now);
                     state.sessions.insert(name.clone(), session);
@@ -272,7 +281,14 @@ impl CommandHandler for ToggleSkate {
                         Some(player.get_pitch()),
                         world,
                     );
-                    broadcast_pose(&server, player.as_entity().get_id(), &pose, true, true);
+                    broadcast_pose(
+                        &server,
+                        player.as_entity().get_id(),
+                        &pose,
+                        true,
+                        true,
+                        Some(&map_filename),
+                    );
                     sender.send_message(TextComponent::text(&format!(
                         "Skate 3 Engine mode enabled on {}.",
                         map_path.file_stem().unwrap_or_default().to_string_lossy()
@@ -323,6 +339,7 @@ fn clear_skate_state(state: &mut ServerState, name: &str) -> bool {
     state.control_updated_at.remove(name);
     state.sessions.remove(name);
     state.map_backed.remove(name);
+    state.map_filenames.remove(name);
     state.pending_loads.remove(name);
     state.pending_initial_scans.remove(name);
     state.engine_accumulator.remove(name);
@@ -745,7 +762,14 @@ fn tick_pending_skate_load(server: &Server, name: &str, global_budget: &mut usiz
         .collision_center
         .insert(name.to_owned(), collision_center);
     drop(state);
-    broadcast_pose(server, player.as_entity().get_id(), &pose, true, false);
+    broadcast_pose(
+        server,
+        player.as_entity().get_id(),
+        &pose,
+        true,
+        false,
+        None,
+    );
     player.send_system_message(TextComponent::text("Skate 3 Engine mode enabled."), true);
 }
 
@@ -754,7 +778,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
         return;
     };
     let now = Instant::now();
-    let (pose, should_refresh_collision, should_broadcast, map_backed) = {
+    let (pose, should_refresh_collision, should_broadcast, map_backed, map_filename) = {
         let Ok(mut state) = server_state().lock() else {
             return;
         };
@@ -814,6 +838,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             pose.root[2],
         ));
         let map_backed = state.map_backed.contains(name);
+        let map_filename = state.map_filenames.get(name).cloned();
         let should_refresh_collision = should_refresh_collision(map_backed, center, pose.root);
         let should_broadcast = state
             .last_broadcast_at
@@ -825,7 +850,13 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 pose.visual = session.skeletal_pose();
             }
         }
-        (pose, should_refresh_collision, should_broadcast, map_backed)
+        (
+            pose,
+            should_refresh_collision,
+            should_broadcast,
+            map_backed,
+            map_filename,
+        )
     };
 
     let root = (
@@ -858,7 +889,14 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
         );
     }
     if should_broadcast {
-        broadcast_pose(server, player.as_entity().get_id(), &pose, true, map_backed);
+        broadcast_pose(
+            server,
+            player.as_entity().get_id(),
+            &pose,
+            true,
+            map_backed,
+            map_filename.as_deref(),
+        );
     }
 }
 
@@ -969,9 +1007,10 @@ fn broadcast_pose(
     pose: &SkatePose,
     active: bool,
     map_backed: bool,
+    map_filename: Option<&str>,
 ) {
     let mut payload = Vec::with_capacity(1100);
-    payload.push(6); // version
+    payload.push(7); // version
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in pose.root {
@@ -1001,8 +1040,16 @@ fn broadcast_pose(
     payload.extend_from_slice(&(trick_name.len() as u16).to_be_bytes());
     payload.extend_from_slice(trick_name);
     append_visual(&mut payload, pose.visual.as_ref(), pose.root);
-    payload.push(u8::from(map_backed));
+    append_map_identity(&mut payload, map_backed, map_filename);
     broadcast_payload(server, &payload);
+}
+
+fn append_map_identity(payload: &mut Vec<u8>, map_backed: bool, map_filename: Option<&str>) {
+    payload.push(u8::from(map_backed));
+    let map_filename = map_filename.unwrap_or_default().as_bytes();
+    let map_filename_len = map_filename.len().min(u16::MAX as usize);
+    payload.extend_from_slice(&(map_filename_len as u16).to_be_bytes());
+    payload.extend_from_slice(&map_filename[..map_filename_len]);
 }
 
 fn append_visual(
@@ -1056,7 +1103,7 @@ fn broadcast_state(
     active: bool,
 ) {
     let mut payload = Vec::with_capacity(84);
-    payload.push(6);
+    payload.push(7);
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in [position.0 as f32, position.1 as f32, position.2 as f32] {
@@ -1086,7 +1133,7 @@ fn broadcast_state(
     payload.resize(payload.len() + 36 * 3 * 2, 0);
     payload.resize(payload.len() + 10 * 4, 0);
     payload.resize(payload.len() + 36 * 4 * 2, 0);
-    payload.push(0); // no authored map
+    append_map_identity(&mut payload, false, None);
 
     broadcast_payload(server, &payload);
 }
@@ -1106,9 +1153,10 @@ mod integration_tests {
     use super::{
         CLIENT_PROTOCOL_VERSION, COLLISION_BLOCKS_GLOBAL_PER_TICK, COLLISION_BLOCKS_PER_TICK,
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, ServerState,
-        append_visual, clear_skate_state, collision::CollisionScan, collision_refresh_needed,
-        collision_work_order, engine, initial_scan_recenter_needed, physics::Controls,
-        should_refresh_collision, supports_client_protocol, take_collision_budget,
+        append_map_identity, append_visual, clear_skate_state, collision::CollisionScan,
+        collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
+        physics::Controls, should_refresh_collision, supports_client_protocol,
+        take_collision_budget,
     };
     use std::time::{Duration, Instant};
 
@@ -1249,6 +1297,18 @@ mod integration_tests {
         assert!(!supports_client_protocol(&[1]));
         assert!(!supports_client_protocol(&[CLIENT_PROTOCOL_VERSION, 0]));
         assert!(!supports_client_protocol(&[]));
+    }
+
+    #[test]
+    fn authored_map_identity_carries_the_selected_filename() {
+        let mut payload = Vec::new();
+        append_map_identity(&mut payload, true, Some("University.skate"));
+        assert_eq!(&payload[..3], &[1, 0, 16]);
+        assert_eq!(&payload[3..], b"University.skate");
+
+        payload.clear();
+        append_map_identity(&mut payload, false, None);
+        assert_eq!(payload, [0, 0, 0]);
     }
 
     #[test]

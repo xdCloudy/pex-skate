@@ -82,10 +82,12 @@ public final class PexSkateClient implements ClientModInitializer {
         PayloadTypeRegistry.serverboundPlay().register(ControlPayload.TYPE, ControlPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(SkateStatePayload.TYPE, SkateStatePayload.CODEC);
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
-            if (payload.version() == 4 || payload.version() == 5 || payload.version() == 6) {
+            if (payload.version() == 4 || payload.version() == 5 || payload.version() == 6 || payload.version() == 7) {
                 context.client().execute(() -> {
-                    if (payload.active() && payload.mapBacked() && !SkateMapModel.isReady()) {
-                        SkateMapModel.loadDefault();
+                    if (payload.active() && payload.mapBacked()
+                            && !SkateMapModel.isReadyFor(payload.mapFilename())) {
+                        if (payload.version() >= 7) SkateMapModel.loadMap(payload.mapFilename());
+                        else SkateMapModel.loadDefault();
                     }
                     SkatePoseCache.accept(payload);
                     SkateMapModel.acceptState(payload.entityId(), payload.active(), payload.mapBacked());
@@ -106,7 +108,7 @@ public final class PexSkateClient implements ClientModInitializer {
             SkateSkaterModel.load();
         });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
-                ClientPlayNetworking.send(new ClientHelloPayload((byte) 2)));
+                ClientPlayNetworking.send(new ClientHelloPayload((byte) 3)));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             clearBoards();
             SkateMapModel.clearActive();
@@ -136,7 +138,8 @@ public final class PexSkateClient implements ClientModInitializer {
     private void updateBoard(Minecraft client, SkateStatePayload state) {
         syncLocalCamera(client, state);
         if (client.player != null && client.player.getId() == state.entityId()) {
-            if (state.active() && state.mapBacked() && !SkateMapModel.isReady() && !mapInstallWarningShown) {
+            if (state.active() && state.mapBacked()
+                    && !SkateMapModel.isReadyFor(state.mapFilename()) && !mapInstallWarningShown) {
                 client.player.sendOverlayMessage(Component.literal(
                         "Install the matching converted Skate map in config/pex-skate/maps to render this district."));
                 mapInstallWarningShown = true;

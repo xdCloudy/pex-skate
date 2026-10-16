@@ -24,7 +24,8 @@ public record SkateStatePayload(
         float cameraForwardX, float cameraForwardY, float cameraForwardZ,
         float cameraUpX, float cameraUpY, float cameraUpZ,
         float cameraFov,
-        boolean mapBacked
+        boolean mapBacked,
+        String mapFilename
 ) implements CustomPacketPayload {
     public static final Type<SkateStatePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath("pexskate", "state"));
     public static final StreamCodec<RegistryFriendlyByteBuf, SkateStatePayload> CODEC = StreamCodec.of(
@@ -62,10 +63,16 @@ public record SkateStatePayload(
                     for (short rotation : payload.boneRotations()) buffer.writeShort(rotation);
                 }
                 if (payload.version() >= 6) buffer.writeBoolean(payload.mapBacked());
+                if (payload.version() >= 7) {
+                    byte[] mapFilename = payload.mapFilename().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    if (mapFilename.length > 512) throw new IllegalArgumentException("PEX Skate map filename exceeds protocol limit");
+                    buffer.writeShort(mapFilename.length);
+                    buffer.writeBytes(mapFilename);
+                }
             },
             buffer -> {
                 byte version = buffer.readByte();
-                if (version != 4 && version != 5 && version != 6) {
+                if (version != 4 && version != 5 && version != 6 && version != 7) {
                     throw new IllegalArgumentException("Unsupported PEX Skate state version " + version);
                 }
                 boolean active = buffer.readBoolean();
@@ -90,6 +97,14 @@ public record SkateStatePayload(
                     for (int i = 0; i < rotations.length; i++) rotations[i] = buffer.readShort();
                 }
                 boolean mapBacked = version >= 6 && buffer.readBoolean();
+                String mapFilename = "";
+                if (version >= 7) {
+                    int mapFilenameLength = buffer.readUnsignedShort();
+                    if (mapFilenameLength > 512) throw new IllegalArgumentException("PEX Skate map filename exceeds protocol limit");
+                    byte[] mapFilenameBytes = new byte[mapFilenameLength];
+                    buffer.readBytes(mapFilenameBytes);
+                    mapFilename = new String(mapFilenameBytes, java.nio.charset.StandardCharsets.UTF_8);
+                }
                 return new SkateStatePayload(version, active, entityId,
                         values[0], values[1], values[2], values[3], values[4], values[5],
                         values[6], values[7], values[8], values[9],
@@ -98,7 +113,7 @@ public record SkateStatePayload(
                         flags, new String(trick, java.nio.charset.StandardCharsets.UTF_8),
                         hipsX, hipsY, hipsZ, boneMask, offsets, rotations,
                         camera[0], camera[1], camera[2], camera[3], camera[4], camera[5],
-                        camera[6], camera[7], camera[8], camera[9], mapBacked);
+                        camera[6], camera[7], camera[8], camera[9], mapBacked, mapFilename);
             }
     );
 

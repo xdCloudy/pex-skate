@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.InflaterInputStream;
@@ -43,14 +44,26 @@ final class SkateMapModel {
     private static final List<Identifier> TEXTURES = new ArrayList<>();
     private static final Set<Integer> ACTIVE_MAP_SKATERS = ConcurrentHashMap.newKeySet();
     private static volatile Model model;
-    private static volatile boolean loadAttempted;
+    private static volatile String attemptedFilename;
 
     private SkateMapModel() {}
 
     static void loadDefault() {
-        if (loadAttempted) return;
-        loadAttempted = true;
-        close();
+        loadMap(null);
+    }
+
+    static boolean isReadyFor(String filename) {
+        Model current = model;
+        return current != null && (filename == null || filename.isBlank()
+                || current.filename.equalsIgnoreCase(filename));
+    }
+
+    static void loadMap(String requestedFilename) {
+        String request = requestedFilename == null || requestedFilename.isBlank() ? null : requestedFilename;
+        if (isReadyFor(request)) return;
+        if (Objects.equals(attemptedFilename, request)) return;
+        attemptedFilename = request;
+        releaseModel();
         Path root = Minecraft.getInstance().gameDirectory.toPath().resolve("config/pex-skate");
         Path maps = root.resolve("maps");
         if (!Files.isDirectory(maps)) {
@@ -58,7 +71,7 @@ final class SkateMapModel {
             return;
         }
         try {
-            Path selected = selectMap(root, maps);
+            Path selected = request == null ? selectMap(root, maps) : selectMapByFilename(request, maps);
             if (selected == null) {
                 LOGGER.info("No converted Skate district map was found at {}", maps);
                 return;
@@ -67,8 +80,22 @@ final class SkateMapModel {
             model = parse(Files.readAllBytes(selected), selected.getFileName().toString());
             LOGGER.info("Loaded Skate district {} with {} material groups", selected.getFileName(), model.primitives.size());
         } catch (Exception error) {
-            close();
+            releaseModel();
             LOGGER.error("Could not load the converted Skate district from {}", maps, error);
+        }
+    }
+
+    private static Path selectMapByFilename(String filename, Path maps) throws IOException {
+        Path requested = Path.of(filename);
+        if (requested.getNameCount() != 1 || filename.contains("..") || filename.contains("/")
+                || filename.contains("\\") || !filename.toLowerCase().endsWith(".skate")) {
+            throw new IOException("server supplied an invalid Skate map filename");
+        }
+        try (var files = Files.list(maps)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().equalsIgnoreCase(filename))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("server-selected map is not installed: " + filename));
         }
     }
 
@@ -110,7 +137,10 @@ final class SkateMapModel {
         else ACTIVE_MAP_SKATERS.remove(entityId);
     }
 
-    static void clearActive() { ACTIVE_MAP_SKATERS.clear(); }
+    static void clearActive() {
+        ACTIVE_MAP_SKATERS.clear();
+        if (model == null) attemptedFilename = null;
+    }
 
     static boolean isReady() { return model != null; }
 
@@ -133,10 +163,15 @@ final class SkateMapModel {
     }
 
     static void close() {
+        releaseModel();
+        ACTIVE_MAP_SKATERS.clear();
+        attemptedFilename = null;
+    }
+
+    private static void releaseModel() {
         Minecraft client = Minecraft.getInstance();
         for (Identifier texture : TEXTURES) client.getTextureManager().release(texture);
         TEXTURES.clear();
-        ACTIVE_MAP_SKATERS.clear();
         model = null;
     }
 
@@ -285,7 +320,7 @@ final class SkateMapModel {
             int[] materialIndices = entry.getValue().toArray();
             primitives.add(new Primitive(positions, normals, uv, materialIndices, textures[texture], materialColors[material]));
         }
-        return new Model(List.copyOf(primitives));
+        return new Model(filename, List.copyOf(primitives));
     }
 
     private static void skipRetailDefinition(Reader reader, int textureCount) throws IOException {
@@ -332,7 +367,7 @@ final class SkateMapModel {
         return (int) value;
     }
 
-    private record Model(List<Primitive> primitives) {}
+    private record Model(String filename, List<Primitive> primitives) {}
     private record ChunkMaterial(int material, int x, int z) {}
 
     private static final class IntBuilder {
