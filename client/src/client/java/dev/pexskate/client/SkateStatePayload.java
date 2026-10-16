@@ -23,7 +23,8 @@ public record SkateStatePayload(
         float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
         float cameraForwardX, float cameraForwardY, float cameraForwardZ,
         float cameraUpX, float cameraUpY, float cameraUpZ,
-        float cameraFov
+        float cameraFov,
+        boolean mapBacked
 ) implements CustomPacketPayload {
     public static final Type<SkateStatePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath("pexskate", "state"));
     public static final StreamCodec<RegistryFriendlyByteBuf, SkateStatePayload> CODEC = StreamCodec.of(
@@ -60,10 +61,11 @@ public record SkateStatePayload(
                     }
                     for (short rotation : payload.boneRotations()) buffer.writeShort(rotation);
                 }
+                if (payload.version() >= 6) buffer.writeBoolean(payload.mapBacked());
             },
             buffer -> {
                 byte version = buffer.readByte();
-                if (version != 4 && version != 5) {
+                if (version != 4 && version != 5 && version != 6) {
                     throw new IllegalArgumentException("Unsupported PEX Skate state version " + version);
                 }
                 boolean active = buffer.readBoolean();
@@ -87,6 +89,7 @@ public record SkateStatePayload(
                 if (version >= 5) {
                     for (int i = 0; i < rotations.length; i++) rotations[i] = buffer.readShort();
                 }
+                boolean mapBacked = version >= 6 && buffer.readBoolean();
                 return new SkateStatePayload(version, active, entityId,
                         values[0], values[1], values[2], values[3], values[4], values[5],
                         values[6], values[7], values[8], values[9],
@@ -95,7 +98,7 @@ public record SkateStatePayload(
                         flags, new String(trick, java.nio.charset.StandardCharsets.UTF_8),
                         hipsX, hipsY, hipsZ, boneMask, offsets, rotations,
                         camera[0], camera[1], camera[2], camera[3], camera[4], camera[5],
-                        camera[6], camera[7], camera[8], camera[9]);
+                        camera[6], camera[7], camera[8], camera[9], mapBacked);
             }
     );
 

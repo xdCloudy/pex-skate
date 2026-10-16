@@ -34,7 +34,7 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
-const CLIENT_PROTOCOL_VERSION: u8 = 1;
+const CLIENT_PROTOCOL_VERSION: u8 = 2;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -272,7 +272,7 @@ impl CommandHandler for ToggleSkate {
                         Some(player.get_pitch()),
                         world,
                     );
-                    broadcast_pose(&server, player.as_entity().get_id(), &pose, true);
+                    broadcast_pose(&server, player.as_entity().get_id(), &pose, true, true);
                     sender.send_message(TextComponent::text(&format!(
                         "Skate 3 Engine mode enabled on {}.",
                         map_path.file_stem().unwrap_or_default().to_string_lossy()
@@ -745,7 +745,7 @@ fn tick_pending_skate_load(server: &Server, name: &str, global_budget: &mut usiz
         .collision_center
         .insert(name.to_owned(), collision_center);
     drop(state);
-    broadcast_pose(server, player.as_entity().get_id(), &pose, true);
+    broadcast_pose(server, player.as_entity().get_id(), &pose, true, false);
     player.send_system_message(TextComponent::text("Skate 3 Engine mode enabled."), true);
 }
 
@@ -754,7 +754,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
         return;
     };
     let now = Instant::now();
-    let (pose, should_refresh_collision, should_broadcast) = {
+    let (pose, should_refresh_collision, should_broadcast, map_backed) = {
         let Ok(mut state) = server_state().lock() else {
             return;
         };
@@ -813,8 +813,8 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             pose.root[1],
             pose.root[2],
         ));
-        let should_refresh_collision =
-            should_refresh_collision(state.map_backed.contains(name), center, pose.root);
+        let map_backed = state.map_backed.contains(name);
+        let should_refresh_collision = should_refresh_collision(map_backed, center, pose.root);
         let should_broadcast = state
             .last_broadcast_at
             .get(name)
@@ -825,7 +825,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 pose.visual = session.skeletal_pose();
             }
         }
-        (pose, should_refresh_collision, should_broadcast)
+        (pose, should_refresh_collision, should_broadcast, map_backed)
     };
 
     let root = (
@@ -858,7 +858,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
         );
     }
     if should_broadcast {
-        broadcast_pose(server, player.as_entity().get_id(), &pose, true);
+        broadcast_pose(server, player.as_entity().get_id(), &pose, true, map_backed);
     }
 }
 
@@ -963,9 +963,15 @@ fn initial_scan_recenter_needed(center: (f32, f32, f32), position: (f32, f32, f3
     dx * dx + dz * dz >= 16.0 || dy.abs() >= 1.5
 }
 
-fn broadcast_pose(server: &Server, entity_id: u32, pose: &SkatePose, active: bool) {
+fn broadcast_pose(
+    server: &Server,
+    entity_id: u32,
+    pose: &SkatePose,
+    active: bool,
+    map_backed: bool,
+) {
     let mut payload = Vec::with_capacity(1100);
-    payload.push(5); // version
+    payload.push(6); // version
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in pose.root {
@@ -995,6 +1001,7 @@ fn broadcast_pose(server: &Server, entity_id: u32, pose: &SkatePose, active: boo
     payload.extend_from_slice(&(trick_name.len() as u16).to_be_bytes());
     payload.extend_from_slice(trick_name);
     append_visual(&mut payload, pose.visual.as_ref(), pose.root);
+    payload.push(u8::from(map_backed));
     broadcast_payload(server, &payload);
 }
 
@@ -1049,7 +1056,7 @@ fn broadcast_state(
     active: bool,
 ) {
     let mut payload = Vec::with_capacity(84);
-    payload.push(4);
+    payload.push(6);
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in [position.0 as f32, position.1 as f32, position.2 as f32] {
@@ -1078,6 +1085,8 @@ fn broadcast_state(
     payload.extend_from_slice(&0_u64.to_be_bytes());
     payload.resize(payload.len() + 36 * 3 * 2, 0);
     payload.resize(payload.len() + 10 * 4, 0);
+    payload.resize(payload.len() + 36 * 4 * 2, 0);
+    payload.push(0); // no authored map
 
     broadcast_payload(server, &payload);
 }
@@ -1237,7 +1246,7 @@ mod integration_tests {
     #[test]
     fn handshake_requires_the_supported_client_protocol_version() {
         assert!(supports_client_protocol(&[CLIENT_PROTOCOL_VERSION]));
-        assert!(!supports_client_protocol(&[2]));
+        assert!(!supports_client_protocol(&[1]));
         assert!(!supports_client_protocol(&[CLIENT_PROTOCOL_VERSION, 0]));
         assert!(!supports_client_protocol(&[]));
     }

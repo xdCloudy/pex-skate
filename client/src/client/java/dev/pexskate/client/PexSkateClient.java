@@ -68,6 +68,7 @@ public final class PexSkateClient implements ClientModInitializer {
     private static final Map<Integer, ItemDisplay> BOARDS = new HashMap<>();
     private static final Map<Integer, Long> LAST_SEEN = new HashMap<>();
     private static final Identifier BOARD_MODEL = Identifier.fromNamespaceAndPath("pexskate", "skateboard");
+    private static boolean mapInstallWarningShown;
 
     private static KeyMapping flickKey(String translationKey, int keyCode) {
         return KeyMappingHelper.registerKeyMapping(new KeyMapping(
@@ -81,13 +82,18 @@ public final class PexSkateClient implements ClientModInitializer {
         PayloadTypeRegistry.serverboundPlay().register(ControlPayload.TYPE, ControlPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(SkateStatePayload.TYPE, SkateStatePayload.CODEC);
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
-            if (payload.version() == 4 || payload.version() == 5) {
+            if (payload.version() == 4 || payload.version() == 5 || payload.version() == 6) {
                 context.client().execute(() -> {
+                    if (payload.active() && payload.mapBacked() && !SkateMapModel.isReady()) {
+                        SkateMapModel.loadDefault();
+                    }
                     SkatePoseCache.accept(payload);
+                    SkateMapModel.acceptState(payload.entityId(), payload.active(), payload.mapBacked());
                     updateBoard(context.client(), payload);
                 });
             }
         });
+        SkateMapModel.registerRenderer();
         LivingEntityRenderLayerRegistrationCallback.EVENT.register((entityType, renderer, helper, context) -> {
             if (entityType == EntityTypes.PLAYER) {
                 @SuppressWarnings("unchecked")
@@ -96,11 +102,15 @@ public final class PexSkateClient implements ClientModInitializer {
                 helper.register(new SkateSkaterRenderLayer(parent));
             }
         });
-        ClientLifecycleEvents.CLIENT_STARTED.register(client -> SkateSkaterModel.load());
+        ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
+            SkateSkaterModel.load();
+        });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
-                ClientPlayNetworking.send(new ClientHelloPayload((byte) 1)));
+                ClientPlayNetworking.send(new ClientHelloPayload((byte) 2)));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             clearBoards();
+            SkateMapModel.clearActive();
+            mapInstallWarningShown = false;
             if (skating && previousCamera != null) {
                 client.options.setCameraType(previousCamera);
             }
@@ -110,6 +120,7 @@ public final class PexSkateClient implements ClientModInitializer {
         });
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
             SkateSkaterModel.close();
+            SkateMapModel.close();
             if (gamepadHandle != 0L) {
                 SDLGamepad.SDL_CloseGamepad(gamepadHandle);
                 gamepadHandle = 0L;
@@ -124,6 +135,15 @@ public final class PexSkateClient implements ClientModInitializer {
 
     private void updateBoard(Minecraft client, SkateStatePayload state) {
         syncLocalCamera(client, state);
+        if (client.player != null && client.player.getId() == state.entityId()) {
+            if (state.active() && state.mapBacked() && !SkateMapModel.isReady() && !mapInstallWarningShown) {
+                client.player.sendOverlayMessage(Component.literal(
+                        "Install the matching converted Skate map in config/pex-skate/maps to render this district."));
+                mapInstallWarningShown = true;
+            } else if (!state.active()) {
+                mapInstallWarningShown = false;
+            }
+        }
         ItemDisplay board = BOARDS.get(state.entityId());
         if (!state.active()) {
             if (board != null) board.discard();
