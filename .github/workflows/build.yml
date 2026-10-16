@@ -21,6 +21,7 @@ jobs:
       - uses: bytecodealliance/setup-wasi-sdk-action@v1
         with:
           version: "27"
+          add-to-path: false
       - name: Configure C compiler for the WASI target
         run: |
           echo "CC_wasm32_wasip2=$WASI_SDK_PATH/bin/clang" >> "$GITHUB_ENV"
