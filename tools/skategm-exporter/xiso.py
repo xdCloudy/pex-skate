@@ -14,6 +14,12 @@ SECTOR = 2048
 MAGIC = b"MICROSOFT*XBOX*MEDIA"
 PARTITIONS = (0, 0xFD90000, 0x2080000, 0x18300000)
 DIRECTORY = 0x10
+MAX_DIRECTORY_SIZE = 64 << 20
+MAX_DIRECTORY_ENTRIES = 1_000_000
+MAX_DIRECTORY_DEPTH = 256
+RESERVED_WINDOWS_NAMES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+RESERVED_WINDOWS_NAMES.update(f"COM{digit}" for digit in "123456789¹²³")
+RESERVED_WINDOWS_NAMES.update(f"LPT{digit}" for digit in "123456789¹²³")
 
 
 class XisoError(Exception):
@@ -24,18 +30,36 @@ class Xiso:
     def __init__(self, path):
         self.path = path
         self.f = open(path, "rb")
+        self.image_size = os.fstat(self.f.fileno()).st_size
         for base in PARTITIONS:
+            if base + 32 * SECTOR + 28 > self.image_size:
+                continue
             self.f.seek(base + 32 * SECTOR)
             head = self.f.read(28)
             if head[:20] == MAGIC:
                 self.base = base
                 self.root_sector, self.root_size = struct.unpack_from("<II", head, 20)
+                try:
+                    self._check_extent(self.root_sector, 0, self.root_size)
+                except Exception:
+                    self.f.close()
+                    raise
                 break
         else:
+            self.f.close()
             raise XisoError("this isn't an Xbox 360 disc image (no XDVDFS volume found)")
 
+    def _check_extent(self, sector, offset, size):
+        if sector < 0 or offset < 0 or size < 0:
+            raise XisoError("the disc image contains a negative XDVDFS extent")
+        start = self.base + sector * SECTOR + offset
+        if start > self.image_size or size > self.image_size - start:
+            raise XisoError("the disc image contains an XDVDFS extent outside the image")
+        return start
+
     def close(self):
-        self.f.close()
+        if not self.f.closed:
+            self.f.close()
 
     def __enter__(self):
         return self
@@ -44,31 +68,59 @@ class Xiso:
         self.close()
 
     def _read(self, sector, offset, size):
-        self.f.seek(self.base + sector * SECTOR + offset)
-        return self.f.read(size)
+        self.f.seek(self._check_extent(sector, offset, size))
+        data = self.f.read(size)
+        if len(data) != size:
+            raise XisoError("the disc image ends early while reading XDVDFS metadata")
+        return data
 
     def listdir(self, sector, size):
         """{lower-case name: (name, sector, size, is_dir)} of one directory"""
         if size == 0:
             return {}
+        if size > MAX_DIRECTORY_SIZE:
+            raise XisoError("an XDVDFS directory is larger than the 64 MiB safety limit")
         table = self._read(sector, 0, size)
         out = {}
         seen = set()
         stack = [0]
         while stack:
             at = stack.pop()
-            if at in seen or at + 14 > len(table):
+            if at in seen:
                 continue
+            if at < 0 or at + 14 > len(table):
+                raise XisoError("the disc image contains an invalid XDVDFS directory pointer")
             seen.add(at)
             left, right, start, length, attrs, nlen = struct.unpack_from("<HHIIBB", table, at)
             if left == 0xFFFF and right == 0xFFFF and start == 0xFFFFFFFF:
                 continue
+            if at + 14 + nlen > len(table):
+                raise XisoError("the disc image contains a truncated XDVDFS directory entry")
             name = table[at + 14:at + 14 + nlen].decode("latin-1")
-            out[name.lower()] = (name, start, length, bool(attrs & DIRECTORY))
+            windows_stem = name.split(".", 1)[0].upper()
+            if (
+                not name
+                or name in (".", "..")
+                or name[-1] in (".", " ")
+                or windows_stem in RESERVED_WINDOWS_NAMES
+                or any(char in name for char in '/\\<>:"|?*')
+                or any(ord(char) < 32 for char in name)
+            ):
+                raise XisoError("the disc image contains an unsafe XDVDFS path name")
+            is_dir = bool(attrs & DIRECTORY)
+            if is_dir and length > MAX_DIRECTORY_SIZE:
+                raise XisoError("an XDVDFS directory is larger than the 64 MiB safety limit")
+            self._check_extent(start, 0, length)
+            key = name.lower()
+            if key in out:
+                raise XisoError("the disc image contains duplicate XDVDFS names")
+            out[key] = (name, start, length, is_dir)
             if left and left != 0xFFFF:
                 stack.append(left * 4)
             if right and right != 0xFFFF:
                 stack.append(right * 4)
+            if len(seen) > MAX_DIRECTORY_ENTRIES:
+                raise XisoError("an XDVDFS directory exceeds the one-million-entry safety limit")
         return out
 
     def find(self, path):
@@ -85,8 +137,10 @@ class Xiso:
             names.append(name)
         return "/".join(names), sector, size, is_dir
 
-    def walk(self, path=""):
+    def walk(self, path="", _visited=None, _depth=0):
         """(path, size) of every file under path, spelled as on the disc"""
+        if _depth > MAX_DIRECTORY_DEPTH:
+            raise XisoError("the XDVDFS directory tree exceeds the 256-level safety limit")
         entry = self.find(path)
         if entry is None:
             return
@@ -94,10 +148,18 @@ class Xiso:
         if not is_dir:
             yield path, size
             return
+        if size == 0:
+            return
+        if _visited is None:
+            _visited = set()
+        identity = (sector, size)
+        if identity in _visited:
+            raise XisoError("the disc image contains a cyclic XDVDFS directory tree")
+        _visited.add(identity)
         for _, (name, s, n, d) in sorted(self.listdir(sector, size).items()):
             child = (path.rstrip("/") + "/" + name) if path else name
             if d:
-                yield from self.walk(child)
+                yield from self.walk(child, _visited, _depth + 1)
             else:
                 yield child, n
 
@@ -107,7 +169,7 @@ class Xiso:
             raise XisoError("not on the disc: " + path)
         _, sector, size, _ = entry
         os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
-        self.f.seek(self.base + sector * SECTOR)
+        self.f.seek(self._check_extent(sector, 0, size))
         left = size
         with open(destination, "wb") as out:
             while left:

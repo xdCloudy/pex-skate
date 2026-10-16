@@ -6,8 +6,10 @@ banks, state graphs, input and physics settings, the skater collections and
 physics skeletons, and the skater model.
 
 The ISO mode reads the required files from the disc image into a temporary
-folder, converts them, then removes that temporary extraction. Nothing is
-downloaded by the exporter and no game files are included here.
+folder, converts them, then removes that temporary extraction. The XDVDFS
+reader checks image extents, rejects unsafe filenames, and bounds directory
+size/depth before extracting. Nothing is downloaded by the exporter and no game
+files are included here.
 
 ## Use
 

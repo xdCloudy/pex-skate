@@ -27,6 +27,7 @@ Vanilla and Bedrock clients can join the server, but cannot use Skate mode. This
 ```powershell
 rustup target add wasm32-wasip2
 cargo test --locked
+python -m unittest discover -s tools/skategm-exporter/tests -v
 ./build.ps1
 ```
 
