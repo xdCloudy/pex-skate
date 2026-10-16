@@ -174,6 +174,18 @@ impl SkateSession {
         Ok(self.pose())
     }
 
+    /// Start a shove immediately from a fresh server input edge. Returns
+    /// whether the engine can play the action in the skater's current state.
+    pub fn start_shove(&mut self) -> bool {
+        self.previous_shove = true;
+        self.session.shove(18)
+    }
+
+    /// Apply Skate 3's vehicle-ejection knockdown to this skater.
+    pub fn knock_down(&mut self, velocity: [f32; 3]) -> bool {
+        self.session.knock_down(velocity)
+    }
+
     pub fn period(&self) -> f32 {
         self.session.period()
     }

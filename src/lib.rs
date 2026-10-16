@@ -437,7 +437,7 @@ struct SkateInput;
 impl EventHandler<PlayerCustomPayloadEvent> for SkateInput {
     fn handle(
         &self,
-        _server: Server,
+        server: Server,
         event: pumpkin_plugin_api::events::EventData<PlayerCustomPayloadEvent>,
     ) -> pumpkin_plugin_api::events::EventData<PlayerCustomPayloadEvent> {
         if event.channel == "pexskate:hello" {
@@ -455,16 +455,111 @@ impl EventHandler<PlayerCustomPayloadEvent> for SkateInput {
             return event;
         };
         let name = event.player.get_name();
-        if let Ok(mut state) = server_state().lock()
+        let now = Instant::now();
+        let world_id = event.player.as_entity().get_world().get_id();
+        let shove_pose = if let Ok(mut state) = server_state().lock()
             && state.enabled.contains(&name)
         {
-            state.controls.insert(name, controls);
-            state
+            let previous_is_fresh = state
                 .control_updated_at
-                .insert(event.player.get_name(), Instant::now());
+                .get(&name)
+                .is_some_and(|updated| now.saturating_duration_since(*updated) <= INPUT_TIMEOUT);
+            let previous = if previous_is_fresh {
+                state.controls.get(&name).copied().unwrap_or_default()
+            } else {
+                Controls::default()
+            };
+            state.controls.insert(name.clone(), controls);
+            state.control_updated_at.insert(name.clone(), now);
+            if controls.shove && !previous.shove {
+                state
+                    .sessions
+                    .get_mut(&name)
+                    .and_then(|session| session.start_shove().then(|| session.pose()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(pose) = shove_pose {
+            apply_shove_to_nearest_skater(&server, &name, &world_id, &pose);
         }
         event
     }
+}
+
+fn apply_shove_to_nearest_skater(
+    server: &Server,
+    attacker: &str,
+    world_id: &str,
+    pose: &SkatePose,
+) {
+    let candidates = server_state()
+        .lock()
+        .map(|state| {
+            state
+                .sessions
+                .iter()
+                .filter(|(name, _)| name.as_str() != attacker)
+                .map(|(name, session)| (name.clone(), session.pose()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let nearest = candidates
+        .into_iter()
+        .filter_map(|(name, target_pose)| {
+            let player = server.get_player_by_name(&name)?;
+            if player.as_entity().get_world().get_id() != world_id {
+                return None;
+            }
+            let (velocity, distance_squared) = shove_impact(pose, target_pose.root)?;
+            Some((name, velocity, distance_squared))
+        })
+        .min_by(|left, right| left.2.total_cmp(&right.2));
+
+    if let Some((name, velocity, _)) = nearest
+        && let Ok(mut state) = server_state().lock()
+        && let Some(target) = state.sessions.get_mut(&name)
+    {
+        target.knock_down(velocity);
+    }
+}
+
+fn shove_impact(attacker: &SkatePose, target: [f32; 3]) -> Option<([f32; 3], f32)> {
+    let [qx, qy, qz, qw] = [
+        attacker.board[3],
+        attacker.board[4],
+        attacker.board[5],
+        attacker.board[6],
+    ];
+    let forward = [
+        2.0 * (qx * qz + qw * qy),
+        2.0 * (qy * qz - qw * qx),
+        1.0 - 2.0 * (qx * qx + qy * qy),
+    ];
+    let forward_length = (forward[0] * forward[0] + forward[2] * forward[2]).sqrt();
+    if !forward_length.is_finite() || forward_length < 1.0e-5 {
+        return None;
+    }
+    let forward = [forward[0] / forward_length, forward[2] / forward_length];
+    let delta = [target[0] - attacker.root[0], target[2] - attacker.root[2]];
+    let distance_squared = delta[0] * delta[0] + delta[1] * delta[1];
+    const MAX_RANGE_SQUARED: f32 = 2.25;
+    if !distance_squared.is_finite()
+        || distance_squared < 0.01
+        || distance_squared > MAX_RANGE_SQUARED
+        || (target[1] - attacker.root[1]).abs() > 1.25
+    {
+        return None;
+    }
+    let distance = distance_squared.sqrt();
+    let direction = [delta[0] / distance, delta[1] / distance];
+    if direction[0] * forward[0] + direction[1] * forward[1] < 0.35 {
+        return None;
+    }
+    Some(([forward[0] * 3.0, 1.25, forward[1] * 3.0], distance_squared))
 }
 
 struct SkatePlayerLeave;
@@ -1159,9 +1254,10 @@ mod integration_tests {
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, ServerState,
         append_map_identity, append_visual, clear_skate_state, collision::CollisionScan,
         collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
-        physics::Controls, should_refresh_collision, supports_client_protocol,
+        physics::Controls, should_refresh_collision, shove_impact, supports_client_protocol,
         take_collision_budget,
     };
+    use engine::SkatePose;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1195,6 +1291,30 @@ mod integration_tests {
         state.controls.insert("rider".into(), controls);
         state.control_updated_at.insert("rider".into(), now);
         assert_eq!(state.controls_for("rider", now), controls);
+    }
+
+    #[test]
+    fn shove_only_knocks_down_a_nearby_skater_in_front() {
+        let attacker = SkatePose {
+            root: [0.0; 3],
+            velocity: [0.0; 3],
+            board: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            trick_name: String::new(),
+            sequence_score: 0.0,
+            line_score: 0.0,
+            total_score: 0.0,
+            multiplier: 1.0,
+            line_time: 0.0,
+            clean: false,
+            sketchy: false,
+            visual: None,
+        };
+        let (impulse, _) = shove_impact(&attacker, [0.0, 0.0, 1.0]).unwrap();
+        assert_eq!(impulse, [0.0, 1.25, 3.0]);
+        assert!(shove_impact(&attacker, [0.0, 0.0, -1.0]).is_none());
+        assert!(shove_impact(&attacker, [1.0, 0.0, 0.0]).is_none());
+        assert!(shove_impact(&attacker, [0.0, 0.0, 2.0]).is_none());
+        assert!(shove_impact(&attacker, [0.0, 2.0, 1.0]).is_none());
     }
 
     #[test]
