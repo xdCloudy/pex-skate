@@ -139,7 +139,8 @@ public final class PexSkateClient implements ClientModInitializer {
         syncLocalCamera(client, state);
         if (client.player != null && client.player.getId() == state.entityId()) {
             if (state.active() && state.mapBacked()
-                    && !SkateMapModel.isReadyFor(state.mapFilename()) && !mapInstallWarningShown) {
+                    && !SkateMapModel.isReadyFor(state.mapFilename())
+                    && !SkateMapModel.isLoadingFor(state.mapFilename()) && !mapInstallWarningShown) {
                 client.player.sendOverlayMessage(Component.literal(
                         "Install the matching converted Skate map in config/pex-skate/maps to render this district."));
                 mapInstallWarningShown = true;

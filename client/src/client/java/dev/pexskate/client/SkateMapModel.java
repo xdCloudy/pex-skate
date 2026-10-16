@@ -27,9 +27,12 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.InflaterInputStream;
 
@@ -45,6 +48,8 @@ final class SkateMapModel {
     private static final Set<Integer> ACTIVE_MAP_SKATERS = ConcurrentHashMap.newKeySet();
     private static volatile Model model;
     private static volatile String attemptedFilename;
+    private static volatile String loadingFilename;
+    private static long loadGeneration;
 
     private SkateMapModel() {}
 
@@ -58,13 +63,21 @@ final class SkateMapModel {
                 || current.filename.equalsIgnoreCase(filename));
     }
 
+    static boolean isLoadingFor(String filename) {
+        return loadingFilename != null && filename != null && loadingFilename.equalsIgnoreCase(filename);
+    }
+
     static void loadMap(String requestedFilename) {
         String request = requestedFilename == null || requestedFilename.isBlank() ? null : requestedFilename;
         if (isReadyFor(request)) return;
-        if (Objects.equals(attemptedFilename, request)) return;
-        attemptedFilename = request;
+        String attemptKey = request == null ? "" : request.toLowerCase(Locale.ROOT);
+        if (Objects.equals(attemptedFilename, attemptKey)) return;
+        attemptedFilename = attemptKey;
+        long generation = ++loadGeneration;
+        loadingFilename = null;
         releaseModel();
-        Path root = Minecraft.getInstance().gameDirectory.toPath().resolve("config/pex-skate");
+        Minecraft client = Minecraft.getInstance();
+        Path root = client.gameDirectory.toPath().resolve("config/pex-skate");
         Path maps = root.resolve("maps");
         if (!Files.isDirectory(maps)) {
             LOGGER.info("No converted Skate district maps at {}; district rendering is unavailable", maps);
@@ -76,11 +89,39 @@ final class SkateMapModel {
                 LOGGER.info("No converted Skate district map was found at {}", maps);
                 return;
             }
-            if (Files.size(selected) > MAX_MAP_BYTES) throw new IOException("map package exceeds 768 MiB limit");
-            model = parse(Files.readAllBytes(selected), selected.getFileName().toString());
-            LOGGER.info("Loaded Skate district {} with {} material groups", selected.getFileName(), model.primitives.size());
+            long maximumPackageBytes = Math.min(MAX_MAP_BYTES, Runtime.getRuntime().maxMemory() / 2);
+            if (Files.size(selected) > maximumPackageBytes) {
+                throw new IOException("map package exceeds this client's memory-based size limit");
+            }
+            String filename = selected.getFileName().toString();
+            loadingFilename = filename;
+            CompletableFuture.supplyAsync(() -> {
+                try {
+                    return parse(Files.readAllBytes(selected), filename);
+                } catch (IOException error) {
+                    throw new CompletionException(error);
+                }
+            }).whenComplete((parsed, error) -> client.execute(() -> {
+                if (generation != loadGeneration) return;
+                loadingFilename = null;
+                if (error != null) {
+                    releaseModel();
+                    Throwable cause = error instanceof CompletionException && error.getCause() != null
+                            ? error.getCause() : error;
+                    LOGGER.error("Could not load the converted Skate district from {}", maps, cause);
+                    return;
+                }
+                try {
+                    model = install(client, parsed);
+                    LOGGER.info("Loaded Skate district {} with {} material groups", filename, model.primitives.size());
+                } catch (Exception installError) {
+                    releaseModel();
+                    LOGGER.error("Could not upload the converted Skate district from {}", maps, installError);
+                }
+            }));
         } catch (Exception error) {
             releaseModel();
+            loadingFilename = null;
             LOGGER.error("Could not load the converted Skate district from {}", maps, error);
         }
     }
@@ -163,6 +204,8 @@ final class SkateMapModel {
     }
 
     static void close() {
+        loadGeneration++;
+        loadingFilename = null;
         releaseModel();
         ACTIVE_MAP_SKATERS.clear();
         attemptedFilename = null;
@@ -175,7 +218,7 @@ final class SkateMapModel {
         model = null;
     }
 
-    private static Model parse(byte[] file, String filename) throws IOException {
+    private static ParsedModel parse(byte[] file, String filename) throws IOException {
         Reader reader = new Reader(file);
         byte[] magic = reader.take(8);
         if (magic[0] != 'S' || magic[1] != 'K' || magic[2] != 'A' || magic[3] != 'T' || magic[4] != 'E'
@@ -206,6 +249,13 @@ final class SkateMapModel {
         int textureCount = (int) textureCountLong;
         int vertexCount = (int) vertexCountLong;
         int indexCount = (int) indexCountLong;
+        long geometryMemoryEstimate = file.length
+                + vertexCountLong * 92L
+                + indexCountLong * 8L;
+        long parserBudget = Runtime.getRuntime().maxMemory() / 2;
+        if (geometryMemoryEstimate > parserBudget) {
+            throw new IOException("SKATE district geometry exceeds this client's parse memory budget");
+        }
         long[] materialTextures = new long[materialCount];
         float[][] materialColors = new float[materialCount][4];
         for (int i = 0; i < materialCount; i++) {
@@ -228,10 +278,7 @@ final class SkateMapModel {
             if (reader.u32() != 0) skipRetailDefinition(reader, textureCount);
         }
 
-        Minecraft client = Minecraft.getInstance();
-        Identifier white = registerWhite(client, filename);
-        Identifier[] textures = new Identifier[textureCount + 1];
-        textures[0] = white;
+        List<TextureData> textures = new ArrayList<>(textureCount);
         long texturePixels = 0;
         for (int i = 0; i < textureCount; i++) {
             String textureName = reader.string();
@@ -240,25 +287,12 @@ final class SkateMapModel {
             reader.u32(); // color space
             long pixels = (long) width * height;
             texturePixels += pixels;
-            if (width == 0 || height == 0 || texturePixels > MAX_TEXTURE_PIXELS) {
+            if (width == 0 || height == 0 || texturePixels > MAX_TEXTURE_PIXELS
+                    || geometryMemoryEstimate + texturePixels * 4L > parserBudget) {
                 throw new IOException("SKATE district textures exceed client memory limit");
             }
             byte[] rgba = reader.stored(Math.multiplyExact(Math.multiplyExact(width, height), 4));
-            NativeImage image = new NativeImage(width, height, false);
-            for (int y = 0, at = 0; y < height; y++) {
-                for (int x = 0; x < width; x++, at += 4) {
-                    int red = rgba[at] & 255;
-                    int green = rgba[at + 1] & 255;
-                    int blue = rgba[at + 2] & 255;
-                    int alpha = rgba[at + 3] & 255;
-                    image.setPixel(x, y, alpha << 24 | red << 16 | green << 8 | blue);
-                }
-            }
-            Identifier id = Identifier.fromNamespaceAndPath(
-                    "pexskate", "map/" + safePath(filename) + "/texture_" + i);
-            client.getTextureManager().register(id, new DynamicTexture(() -> "PEX Skate " + mapName + " " + textureName, image));
-            TEXTURES.add(id);
-            textures[i + 1] = id;
+            textures.add(new TextureData(textureName, width, height, rgba));
         }
 
         byte[] vertexBytes = reader.stored(Math.multiplyExact(vertexCount, 56));
@@ -312,15 +346,43 @@ final class SkateMapModel {
             indices.add(b);
             indices.add(c);
         }
-        List<Primitive> primitives = new ArrayList<>();
+        List<PendingPrimitive> primitives = new ArrayList<>();
         for (Map.Entry<ChunkMaterial, IntBuilder> entry : grouped.entrySet()) {
             int material = entry.getKey().material;
             int texture = Math.toIntExact(materialTextures[material]);
-            if (texture < 0 || texture >= textures.length) throw new IOException("SKATE material references an invalid texture");
+            if (texture < 0 || texture > textures.size()) throw new IOException("SKATE material references an invalid texture");
             int[] materialIndices = entry.getValue().toArray();
-            primitives.add(new Primitive(positions, normals, uv, materialIndices, textures[texture], materialColors[material]));
+            primitives.add(new PendingPrimitive(positions, normals, uv, materialIndices, texture, materialColors[material]));
         }
-        return new Model(filename, List.copyOf(primitives));
+        return new ParsedModel(filename, mapName, List.copyOf(textures), List.copyOf(primitives));
+    }
+
+    private static Model install(Minecraft client, ParsedModel parsed) {
+        Identifier[] textures = new Identifier[parsed.textures.size() + 1];
+        textures[0] = registerWhite(client, parsed.filename);
+        for (int i = 0; i < parsed.textures.size(); i++) {
+            TextureData texture = parsed.textures.get(i);
+            NativeImage image = new NativeImage(texture.width, texture.height, false);
+            boolean transferred = false;
+            try {
+                image.getPixelBytes().put(texture.rgba);
+                Identifier id = Identifier.fromNamespaceAndPath(
+                        "pexskate", "map/" + safePath(parsed.filename) + "/texture_" + i);
+                client.getTextureManager().register(id, new DynamicTexture(
+                        () -> "PEX Skate " + parsed.mapName + " " + texture.name, image));
+                TEXTURES.add(id);
+                textures[i + 1] = id;
+                transferred = true;
+            } finally {
+                if (!transferred) image.close();
+            }
+        }
+        List<Primitive> primitives = new ArrayList<>(parsed.primitives.size());
+        for (PendingPrimitive primitive : parsed.primitives) {
+            primitives.add(new Primitive(primitive.positions, primitive.normals, primitive.uv,
+                    primitive.indices, textures[primitive.textureIndex], primitive.color));
+        }
+        return new Model(parsed.filename, List.copyOf(primitives));
     }
 
     private static void skipRetailDefinition(Reader reader, int textureCount) throws IOException {
@@ -368,6 +430,11 @@ final class SkateMapModel {
     }
 
     private record Model(String filename, List<Primitive> primitives) {}
+    private record ParsedModel(String filename, String mapName, List<TextureData> textures,
+                               List<PendingPrimitive> primitives) {}
+    private record TextureData(String name, int width, int height, byte[] rgba) {}
+    private record PendingPrimitive(float[] positions, float[] normals, float[] uv, int[] indices,
+                                    int textureIndex, float[] color) {}
     private record ChunkMaterial(int material, int x, int z) {}
 
     private static final class IntBuilder {
