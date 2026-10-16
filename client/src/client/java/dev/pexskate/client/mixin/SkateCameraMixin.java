@@ -31,7 +31,7 @@ public abstract class SkateCameraMixin {
     private void pexskate$applyEngineCamera(CameraRenderState state, DeltaTracker delta, CallbackInfo ci) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null || client.level == null) return;
-        SkatePoseCache.Pose pose = SkatePoseCache.sample(client.player.getId());
+        SkatePoseCache.Pose pose = SkatePoseCache.sample(client.player.getId(), true);
         if (pose == null || !pose.hasCamera()) return;
 
         float[] camera = pose.cameraPosition();
@@ -66,7 +66,7 @@ public abstract class SkateCameraMixin {
     private void pexskate$refreshCameraFrustum(CameraRenderState state, DeltaTracker delta, CallbackInfo ci) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) return;
-        SkatePoseCache.Pose pose = SkatePoseCache.sample(client.player.getId());
+        SkatePoseCache.Pose pose = SkatePoseCache.sample(client.player.getId(), true);
         if (pose == null || !pose.hasCamera()) return;
 
         float[] forwardValues = pose.cameraForward();

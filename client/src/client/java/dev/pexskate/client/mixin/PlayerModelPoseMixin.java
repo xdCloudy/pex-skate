@@ -1,6 +1,7 @@
 package dev.pexskate.client.mixin;
 
 import dev.pexskate.client.SkatePoseCache;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.player.PlayerModel;
 import net.minecraft.client.renderer.entity.state.AvatarRenderState;
 import org.spongepowered.asm.mixin.Mixin;
@@ -13,7 +14,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class PlayerModelPoseMixin {
     @Inject(method = "setupAnim(Lnet/minecraft/client/renderer/entity/state/AvatarRenderState;)V", at = @At("TAIL"))
     private void pexskate$applySkatePose(AvatarRenderState state, CallbackInfo ci) {
-        SkatePoseCache.Pose pose = SkatePoseCache.sample(state.id);
+        Minecraft client = Minecraft.getInstance();
+        boolean localEntity = client.player != null && client.player.getId() == state.id;
+        SkatePoseCache.Pose pose = SkatePoseCache.sample(state.id, localEntity);
         if (pose == null) return;
 
         PlayerModel model = (PlayerModel) (Object) this;

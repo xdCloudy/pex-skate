@@ -6,6 +6,8 @@ import java.util.Map;
 /** Interpolated, server-authoritative Skate 3 joint positions keyed by entity id. */
 public final class SkatePoseCache {
     private static final long INTERPOLATION_DELAY_NANOS = 75_000_000L;
+    private static final long LOCAL_INTERPOLATION_DELAY_NANOS = 25_000_000L;
+    private static final long MAX_EXTRAPOLATION_NANOS = 50_000_000L;
     private static final Map<Integer, Track> TRACKS = new HashMap<>();
 
     private SkatePoseCache() {}
@@ -24,6 +26,7 @@ public final class SkatePoseCache {
         };
         Frame next = new Frame(now, packet.x(), packet.y(), packet.z(),
                 packet.hipsX(), packet.hipsY(), packet.hipsZ(),
+                packet.velocityX(), packet.velocityY(), packet.velocityZ(),
                 packet.boneMask(), packet.boneOffsets(), packet.boneRotations(), boardYaw(packet), camera);
         if (track == null) TRACKS.put(packet.entityId(), new Track(next, next));
         else {
@@ -41,14 +44,25 @@ public final class SkatePoseCache {
     }
 
     public static Pose sample(int entityId) {
+        return sample(entityId, false);
+    }
+
+    /** Local presentation uses a shorter buffer and predicts only from the server's latest velocity. */
+    public static Pose sample(int entityId, boolean localEntity) {
         Track track = TRACKS.get(entityId);
         if (track == null) return null;
         Frame a = track.previous;
         Frame b = track.current;
-        long sampleTime = System.nanoTime() - INTERPOLATION_DELAY_NANOS;
-        if (b.time <= a.time || sampleTime >= b.time) return new Pose(b, b, 1.0f);
+        long delay = localEntity ? LOCAL_INTERPOLATION_DELAY_NANOS : INTERPOLATION_DELAY_NANOS;
+        long sampleTime = System.nanoTime() - delay;
+        if (b.time <= a.time) return new Pose(b, b, 1.0f, 0.0f);
+        if (sampleTime >= b.time) {
+            long extrapolation = localEntity
+                    ? Math.min(sampleTime - b.time, MAX_EXTRAPOLATION_NANOS) : 0L;
+            return new Pose(b, b, 1.0f, extrapolation / 1_000_000_000.0f);
+        }
         if (sampleTime <= a.time) return new Pose(a, a, 0.0f);
-        return new Pose(a, b, (float) (sampleTime - a.time) / (float) (b.time - a.time));
+        return new Pose(a, b, (float) (sampleTime - a.time) / (float) (b.time - a.time), 0.0f);
     }
 
     private static float boardYaw(SkateStatePayload p) {
@@ -68,14 +82,23 @@ public final class SkatePoseCache {
 
     private record Frame(long time, float rootX, float rootY, float rootZ,
                          float hipsX, float hipsY, float hipsZ,
+                         float velocityX, float velocityY, float velocityZ,
                          long mask, short[] offsets, short[] rotations, float yaw, float[] camera) {}
 
     public static final class Pose {
         private final Frame a;
         private final Frame b;
         private final float t;
+        private final float extrapolationSeconds;
 
-        private Pose(Frame a, Frame b, float t) { this.a = a; this.b = b; this.t = t; }
+        private Pose(Frame a, Frame b, float t) { this(a, b, t, 0.0f); }
+
+        private Pose(Frame a, Frame b, float t, float extrapolationSeconds) {
+            this.a = a;
+            this.b = b;
+            this.t = t;
+            this.extrapolationSeconds = extrapolationSeconds;
+        }
 
         public boolean has(int index) {
             return ((a.mask & b.mask) & (1L << index)) != 0;
@@ -86,9 +109,9 @@ public final class SkatePoseCache {
             float[] first = point(a, index);
             float[] second = point(b, index);
             return new float[] {
-                    lerp(first[0], second[0], t),
-                    lerp(first[1], second[1], t),
-                    lerp(first[2], second[2], t)
+                    lerp(first[0], second[0], t) + b.velocityX * extrapolationSeconds,
+                    lerp(first[1], second[1], t) + b.velocityY * extrapolationSeconds,
+                    lerp(first[2], second[2], t) + b.velocityZ * extrapolationSeconds
             };
         }
 
@@ -127,9 +150,9 @@ public final class SkatePoseCache {
         public float[] cameraPosition() {
             if (!hasCamera()) return null;
             return new float[] {
-                    lerp(a.rootX + a.camera[0], b.rootX + b.camera[0], t),
-                    lerp(a.rootY + a.camera[1], b.rootY + b.camera[1], t),
-                    lerp(a.rootZ + a.camera[2], b.rootZ + b.camera[2], t)
+                    lerp(a.rootX + a.camera[0], b.rootX + b.camera[0], t) + b.velocityX * extrapolationSeconds,
+                    lerp(a.rootY + a.camera[1], b.rootY + b.camera[1], t) + b.velocityY * extrapolationSeconds,
+                    lerp(a.rootZ + a.camera[2], b.rootZ + b.camera[2], t) + b.velocityZ * extrapolationSeconds
             };
         }
 
