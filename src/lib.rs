@@ -35,7 +35,6 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
-const MAX_PROP_UPDATES: usize = 8_192;
 const CLIENT_PROTOCOL_VERSION: u8 = 6;
 const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 
@@ -1605,7 +1604,7 @@ fn broadcast_pose(
 }
 
 fn append_prop_updates(payload: &mut Vec<u8>, updates: &[(u64, [f32; 3])]) {
-    let count = updates.len().min(MAX_PROP_UPDATES);
+    let count = updates.len().min(prop_physics::MAX_PROP_UPDATES);
     payload.extend_from_slice(&(count as u16).to_be_bytes());
     for (identity, translation) in updates.iter().take(count) {
         payload.extend_from_slice(&identity.to_be_bytes());
@@ -1753,7 +1752,7 @@ mod integration_tests {
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, PropWorldKey,
         ServerState, append_map_identity, append_prop_updates, append_visual, clear_skate_state,
         collision::CollisionScan, collision_refresh_needed, collision_work_order, engine,
-        initial_scan_recenter_needed, physics::Controls, player_collision_impact,
+        initial_scan_recenter_needed, physics::Controls, player_collision_impact, prop_physics,
         sequence_is_newer, should_refresh_collision, shove_impact, shove_pressed_edge,
         supports_client_protocol, swept_player_collision_impact, take_collision_budget,
     };
@@ -2098,8 +2097,14 @@ mod integration_tests {
         let updates = vec![(1, [0.0; 3]); 8_193];
         let mut payload = Vec::new();
         append_prop_updates(&mut payload, &updates);
-        assert_eq!(u16::from_be_bytes([payload[0], payload[1]]), 8_192);
-        assert_eq!(payload.len(), 2 + 8_192 * (8 + 3 * 4));
+        assert_eq!(
+            u16::from_be_bytes([payload[0], payload[1]]) as usize,
+            prop_physics::MAX_PROP_UPDATES
+        );
+        assert_eq!(
+            payload.len(),
+            2 + prop_physics::MAX_PROP_UPDATES * (8 + 3 * 4)
+        );
     }
 
     #[test]

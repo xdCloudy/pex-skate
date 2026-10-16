@@ -9,6 +9,7 @@ const MIN_IMPACT_SPEED: f32 = 1.0;
 const IMPULSE_SCALE: f32 = 0.28;
 const MAX_PROP_SPEED: f32 = 7.0;
 const LINEAR_DAMPING: f32 = 2.2;
+pub const MAX_PROP_UPDATES: usize = 8_192;
 
 #[derive(Clone, Debug)]
 pub struct PropBody {
@@ -43,10 +44,16 @@ impl PropWorld {
 
     /// Return the latest translation for each body changed since `revision`.
     pub fn changes_since(&self, revision: u64) -> (Vec<(u64, [f32; 3])>, u64) {
-        let changes = self
+        let mut bodies = self
             .bodies
             .iter()
             .filter(|body| body.revision > revision)
+            .collect::<Vec<_>>();
+        bodies.sort_unstable_by_key(|body| body.revision);
+        let count = bodies.len().min(MAX_PROP_UPDATES);
+        let changes = bodies
+            .iter()
+            .take(count)
             .map(|body| {
                 (
                     body.identity,
@@ -58,7 +65,11 @@ impl PropWorld {
                 )
             })
             .collect();
-        (changes, self.revision)
+        let acknowledged_revision = bodies
+            .get(count.saturating_sub(1))
+            .filter(|_| count > 0)
+            .map_or(self.revision, |body| body.revision);
+        (changes, acknowledged_revision)
     }
 
     /// Apply one swept board impact and advance existing body velocities.
@@ -229,7 +240,7 @@ fn length(vector: [f32; 3]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{PropBody, PropWorld};
+    use super::{MAX_PROP_UPDATES, PropBody, PropWorld};
 
     fn identity() -> [f32; 16] {
         [
@@ -288,5 +299,34 @@ mod tests {
         assert!(!world.step([3.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0; 3], f32::NAN));
         assert!(world.step([3.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0; 3], 0.05));
         assert!(world.transforms()[0].1[12] > after_impact);
+    }
+
+    #[test]
+    fn oversized_prop_snapshots_resume_after_the_last_transmitted_revision() {
+        let mut bodies = (0..=MAX_PROP_UPDATES)
+            .map(|identity| box_body_with_identity(identity as u64))
+            .collect::<Vec<_>>();
+        for (index, body) in bodies.iter_mut().enumerate() {
+            body.revision = index as u64 + 1;
+        }
+        let world = PropWorld {
+            bodies,
+            revision: MAX_PROP_UPDATES as u64 + 1,
+        };
+
+        let (updates, acknowledged) = world.changes_since(0);
+        assert_eq!(updates.len(), MAX_PROP_UPDATES);
+        assert_eq!(updates[0].0, 0);
+        assert_eq!(updates[MAX_PROP_UPDATES - 1].0, MAX_PROP_UPDATES as u64 - 1);
+        assert_eq!(acknowledged, MAX_PROP_UPDATES as u64);
+
+        let (remaining, final_revision) = world.changes_since(acknowledged);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].0, MAX_PROP_UPDATES as u64);
+        assert_eq!(final_revision, MAX_PROP_UPDATES as u64 + 1);
+    }
+
+    fn box_body_with_identity(id: u64) -> PropBody {
+        PropBody::new(id, identity(), [-0.5, -0.5, -0.5, 0.5, 0.5, 0.5])
     }
 }
