@@ -86,7 +86,7 @@ public final class PexSkateClient implements ClientModInitializer {
         PayloadTypeRegistry.serverboundPlay().register(ControlPayload.TYPE, ControlPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(SkateStatePayload.TYPE, SkateStatePayload.CODEC);
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
-            if (payload.version() == 4 || payload.version() == 5 || payload.version() == 6 || payload.version() == 7 || payload.version() == 8 || payload.version() == 9) {
+            if (payload.version() >= 4 && payload.version() <= 10) {
                 context.client().execute(() -> {
                     if (payload.version() >= 9 && payload.active() && context.client().player != null
                             && context.client().player.getId() == payload.entityId()) {
@@ -100,6 +100,10 @@ public final class PexSkateClient implements ClientModInitializer {
                     }
                     SkatePoseCache.accept(payload);
                     SkateMapModel.acceptState(payload.entityId(), payload.active(), payload.mapBacked());
+                    if (payload.active() && payload.mapBacked()) {
+                        SkateMapModel.acceptPropTransforms(
+                                payload.mapFilename(), payload.propsSha256(), payload.propTransforms());
+                    }
                     updateBoard(context.client(), payload);
                 });
             }
@@ -120,7 +124,7 @@ public final class PexSkateClient implements ClientModInitializer {
             nextControlSequence = 0;
             outstandingControls.clear();
             SkatePoseCache.resetInputRoundTrip();
-            ClientPlayNetworking.send(new ClientHelloPayload((byte) 5));
+            ClientPlayNetworking.send(new ClientHelloPayload((byte) 6));
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             clearBoards();

@@ -4,6 +4,7 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.Identifier;
+import java.util.List;
 
 public record SkateStatePayload(
         byte version,
@@ -28,8 +29,11 @@ public record SkateStatePayload(
         String mapFilename,
         String mapSha256,
         String propsSha256,
-        int acknowledgedControlSequence
+        int acknowledgedControlSequence,
+        List<PropTransform> propTransforms
 ) implements CustomPacketPayload {
+    public record PropTransform(long identity, float x, float y, float z) {}
+
     public static final Type<SkateStatePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath("pexskate", "state"));
     public static final StreamCodec<RegistryFriendlyByteBuf, SkateStatePayload> CODEC = StreamCodec.of(
             (buffer, payload) -> {
@@ -77,10 +81,22 @@ public record SkateStatePayload(
                     writeDigest(buffer, payload.propsSha256());
                 }
                 if (payload.version() >= 9) buffer.writeInt(payload.acknowledgedControlSequence());
+                if (payload.version() >= 10) {
+                    if (payload.propTransforms().size() > 8192) {
+                        throw new IllegalArgumentException("PEX Skate prop update count exceeds protocol limit");
+                    }
+                    buffer.writeShort(payload.propTransforms().size());
+                    for (PropTransform transform : payload.propTransforms()) {
+                        buffer.writeLong(transform.identity());
+                        buffer.writeFloat(transform.x());
+                        buffer.writeFloat(transform.y());
+                        buffer.writeFloat(transform.z());
+                    }
+                }
             },
             buffer -> {
                 byte version = buffer.readByte();
-                if (version != 4 && version != 5 && version != 6 && version != 7 && version != 8 && version != 9) {
+                if (version != 4 && version != 5 && version != 6 && version != 7 && version != 8 && version != 9 && version != 10) {
                     throw new IllegalArgumentException("Unsupported PEX Skate state version " + version);
                 }
                 boolean active = buffer.readBoolean();
@@ -116,6 +132,16 @@ public record SkateStatePayload(
                 String mapSha256 = version >= 8 ? readDigest(buffer) : "";
                 String propsSha256 = version >= 8 ? readDigest(buffer) : "";
                 int acknowledgedControlSequence = version >= 9 ? buffer.readInt() : 0;
+                List<PropTransform> propTransforms = List.of();
+                if (version >= 10) {
+                    int propCount = buffer.readUnsignedShort();
+                    if (propCount > 8192) throw new IllegalArgumentException("PEX Skate prop update count exceeds protocol limit");
+                    var updates = new java.util.ArrayList<PropTransform>(propCount);
+                    for (int i = 0; i < propCount; i++) {
+                        updates.add(new PropTransform(buffer.readLong(), buffer.readFloat(), buffer.readFloat(), buffer.readFloat()));
+                    }
+                    propTransforms = List.copyOf(updates);
+                }
                 return new SkateStatePayload(version, active, entityId,
                         values[0], values[1], values[2], values[3], values[4], values[5],
                         values[6], values[7], values[8], values[9],
@@ -125,7 +151,7 @@ public record SkateStatePayload(
                         hipsX, hipsY, hipsZ, boneMask, offsets, rotations,
                         camera[0], camera[1], camera[2], camera[3], camera[4], camera[5],
                         camera[6], camera[7], camera[8], camera[9], mapBacked, mapFilename,
-                        mapSha256, propsSha256, acknowledgedControlSequence);
+                        mapSha256, propsSha256, acknowledgedControlSequence, propTransforms);
             }
     );
 

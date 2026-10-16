@@ -1,6 +1,7 @@
 mod collision;
 mod engine;
 mod physics;
+mod prop_physics;
 
 use collision::CollisionScan;
 use engine::{SkatePose, SkateSession};
@@ -34,7 +35,7 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
-const CLIENT_PROTOCOL_VERSION: u8 = 5;
+const CLIENT_PROTOCOL_VERSION: u8 = 6;
 const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 
 fn server_state() -> &'static Mutex<ServerState> {
@@ -61,6 +62,10 @@ struct ServerState {
     map_backed: HashSet<String>,
     map_filenames: HashMap<String, String>,
     map_digests: HashMap<String, MapDigests>,
+    prop_world_keys: HashMap<String, PropWorldKey>,
+    prop_worlds: HashMap<PropWorldKey, prop_physics::PropWorld>,
+    prop_world_advanced_at: HashMap<PropWorldKey, Instant>,
+    prop_sent_revisions: HashMap<String, (PropWorldKey, u64)>,
     pending_loads: HashSet<String>,
     pending_initial_scans: HashMap<String, PendingSkateLoad>,
     engine_accumulator: HashMap<String, f32>,
@@ -77,6 +82,23 @@ struct ServerState {
 struct MapDigests {
     map: String,
     props: String,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PropWorldKey {
+    world_id: String,
+    map_filename: String,
+    props_digest: String,
+}
+
+impl PropWorldKey {
+    fn new(world_id: String, map_filename: &str, props_digest: &str) -> Self {
+        Self {
+            world_id,
+            map_filename: map_filename.to_ascii_lowercase(),
+            props_digest: props_digest.to_ascii_lowercase(),
+        }
+    }
 }
 
 struct PendingSkateLoad {
@@ -286,6 +308,16 @@ impl CommandHandler for ToggleSkate {
                         f64::from(pose.root[1]),
                         f64::from(pose.root[2]),
                     );
+                    let map_filename = map_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
+                    let prop_world_key = PropWorldKey::new(
+                        player.as_entity().get_world().get_id().to_string(),
+                        &map_filename,
+                        &map_digests.props,
+                    );
                     let now = Instant::now();
                     let Ok(mut state) = server_state().lock() else {
                         clear_pending_load(&name);
@@ -296,18 +328,46 @@ impl CommandHandler for ToggleSkate {
                     if !state.pending_loads.remove(&name) {
                         return Ok(0);
                     }
+                    let initial_prop_world =
+                        prop_physics::PropWorld::new(session.prop_physics_bodies());
+                    let shared_prop_transforms = state
+                        .prop_worlds
+                        .entry(prop_world_key.clone())
+                        .or_insert(initial_prop_world)
+                        .transforms();
+                    if let Err(error) = session.update_prop_transforms(&shared_prop_transforms) {
+                        state.pending_loads.remove(&name);
+                        if !state
+                            .prop_world_keys
+                            .values()
+                            .any(|key| key == &prop_world_key)
+                        {
+                            state.prop_worlds.remove(&prop_world_key);
+                            state.prop_world_advanced_at.remove(&prop_world_key);
+                        }
+                        drop(state);
+                        sender.send_message(TextComponent::text(&format!(
+                            "Could not initialize shared Skate prop collision: {error}"
+                        )));
+                        return Ok(0);
+                    }
                     state.pending_initial_scans.remove(&name);
                     state.enabled.insert(name.clone());
                     state.map_backed.insert(name.clone());
-                    let map_filename = map_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned();
                     state
                         .map_filenames
                         .insert(name.clone(), map_filename.clone());
                     state.map_digests.insert(name.clone(), map_digests.clone());
+                    state
+                        .prop_world_keys
+                        .insert(name.clone(), prop_world_key.clone());
+                    state
+                        .prop_sent_revisions
+                        .insert(name.clone(), (prop_world_key.clone(), 0));
+                    state
+                        .prop_world_advanced_at
+                        .entry(prop_world_key.clone())
+                        .or_insert(now);
                     state.controls.insert(name.clone(), Controls::default());
                     state.control_updated_at.insert(name.clone(), now);
                     state.sessions.insert(name.clone(), session);
@@ -318,6 +378,14 @@ impl CommandHandler for ToggleSkate {
                     state
                         .collision_center
                         .insert(name.clone(), (root.0 as f32, root.1 as f32, root.2 as f32));
+                    let (prop_updates, prop_revision) = state
+                        .prop_worlds
+                        .get(&prop_world_key)
+                        .map(|world| world.changes_since(0))
+                        .unwrap_or_default();
+                    state
+                        .prop_sent_revisions
+                        .insert(name.clone(), (prop_world_key, prop_revision));
                     drop(state);
                     let world = player.as_entity().get_world();
                     player.teleport(
@@ -335,6 +403,7 @@ impl CommandHandler for ToggleSkate {
                         Some(&map_filename),
                         Some(&map_digests),
                         0,
+                        &prop_updates,
                     );
                     sender.send_message(TextComponent::text(&format!(
                         "Skate 3 Engine mode enabled on {}.",
@@ -390,6 +459,16 @@ fn clear_skate_state(state: &mut ServerState, name: &str) -> bool {
     state.map_backed.remove(name);
     state.map_filenames.remove(name);
     state.map_digests.remove(name);
+    if let Some(prop_world_key) = state.prop_world_keys.remove(name)
+        && !state
+            .prop_world_keys
+            .values()
+            .any(|key| key == &prop_world_key)
+    {
+        state.prop_worlds.remove(&prop_world_key);
+        state.prop_world_advanced_at.remove(&prop_world_key);
+    }
+    state.prop_sent_revisions.remove(name);
     state.pending_loads.remove(name);
     state.pending_initial_scans.remove(name);
     state.engine_accumulator.remove(name);
@@ -1079,6 +1158,7 @@ fn tick_pending_skate_load(server: &Server, name: &str, global_budget: &mut usiz
         None,
         None,
         0,
+        &[],
     );
     player.send_system_message(TextComponent::text("Skate 3 Engine mode enabled."), true);
 }
@@ -1098,6 +1178,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
         map_filename,
         map_digests,
         acknowledged_sequence,
+        prop_updates,
     ) =
         {
             let Ok(mut state) = server_state().lock() else {
@@ -1177,6 +1258,12 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                     )
                 })
                 .collect::<HashMap<_, _>>();
+            let prop_world_key = state.prop_world_keys.get(name).cloned();
+            let shared_prop_transforms = prop_world_key
+                .as_ref()
+                .and_then(|key| state.prop_worlds.get(key))
+                .map(prop_physics::PropWorld::transforms)
+                .unwrap_or_default();
             let Some(session) = state.sessions.get_mut(name) else {
                 return;
             };
@@ -1187,7 +1274,10 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 .iter()
                 .map(|(_, player_pose, _)| player_pose.clone())
                 .collect();
-            let mut failure = session.refresh_player_collision(&collision_players).err();
+            let mut failure = session
+                .update_prop_transforms(shared_prop_transforms.as_slice())
+                .err()
+                .or_else(|| session.refresh_player_collision(&collision_players).err());
             while remaining >= period && steps < 6 {
                 if failure.is_some() {
                     break;
@@ -1219,6 +1309,25 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                     true,
                 );
                 return;
+            }
+            if let Some(key) = prop_world_key.as_ref() {
+                let previous_step = state
+                    .prop_world_advanced_at
+                    .insert(key.clone(), now)
+                    .unwrap_or(now);
+                let delta = now.saturating_duration_since(previous_step).as_secs_f32();
+                if let Some(world) = state.prop_worlds.get_mut(&key) {
+                    world.step(
+                        [
+                            previous_pose.board[0],
+                            previous_pose.board[1],
+                            previous_pose.board[2],
+                        ],
+                        [pose.board[0], pose.board[1], pose.board[2]],
+                        pose.velocity,
+                        delta,
+                    );
+                }
             }
             let acknowledged_sequence = state.acknowledge_control_step(name, steps, now);
             for (other_name, other_pose, _) in &nearby_players {
@@ -1268,10 +1377,25 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             let should_broadcast = state.last_broadcast_at.get(name).is_none_or(|last| {
                 now.saturating_duration_since(*last) >= STATE_BROADCAST_INTERVAL
             });
+            let mut prop_updates = Vec::new();
             if should_broadcast {
                 state.last_broadcast_at.insert(name.to_owned(), now);
                 if let Some(session) = state.sessions.get_mut(name) {
                     pose.visual = session.skeletal_pose();
+                }
+                if let Some(key) = prop_world_key.as_ref() {
+                    let previous_revision = state
+                        .prop_sent_revisions
+                        .get(name)
+                        .filter(|(previous_key, _)| previous_key == key)
+                        .map_or(0, |(_, revision)| *revision);
+                    if let Some(world) = state.prop_worlds.get(key) {
+                        let (updates, revision) = world.changes_since(previous_revision);
+                        prop_updates = updates;
+                        state
+                            .prop_sent_revisions
+                            .insert(name.to_owned(), (key.clone(), revision));
+                    }
                 }
             }
             (
@@ -1282,6 +1406,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 map_filename,
                 map_digests,
                 acknowledged_sequence,
+                prop_updates,
             )
         };
 
@@ -1324,6 +1449,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             map_filename.as_deref(),
             map_digests.as_ref(),
             acknowledged_sequence,
+            &prop_updates,
         );
     }
 }
@@ -1438,9 +1564,10 @@ fn broadcast_pose(
     map_filename: Option<&str>,
     map_digests: Option<&MapDigests>,
     acknowledged_sequence: u32,
+    prop_updates: &[(u64, [f32; 3])],
 ) {
     let mut payload = Vec::with_capacity(1100);
-    payload.push(9); // version
+    payload.push(10); // version
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in pose.root {
@@ -1472,7 +1599,19 @@ fn broadcast_pose(
     append_visual(&mut payload, pose.visual.as_ref(), pose.root);
     append_map_identity(&mut payload, map_backed, map_filename, map_digests);
     payload.extend_from_slice(&acknowledged_sequence.to_be_bytes());
+    append_prop_updates(&mut payload, prop_updates);
     broadcast_payload(server, &payload);
+}
+
+fn append_prop_updates(payload: &mut Vec<u8>, updates: &[(u64, [f32; 3])]) {
+    let count = updates.len().min(u16::MAX as usize);
+    payload.extend_from_slice(&(count as u16).to_be_bytes());
+    for (identity, translation) in updates.iter().take(count) {
+        payload.extend_from_slice(&identity.to_be_bytes());
+        for value in translation {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+    }
 }
 
 fn append_map_identity(
@@ -1559,7 +1698,7 @@ fn broadcast_state(
     active: bool,
 ) {
     let mut payload = Vec::with_capacity(84);
-    payload.push(9);
+    payload.push(10);
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in [position.0 as f32, position.1 as f32, position.2 as f32] {
@@ -1591,6 +1730,7 @@ fn broadcast_state(
     payload.resize(payload.len() + 36 * 4 * 2, 0);
     append_map_identity(&mut payload, false, None, None);
     payload.extend_from_slice(&0_u32.to_be_bytes());
+    append_prop_updates(&mut payload, &[]);
 
     broadcast_payload(server, &payload);
 }
@@ -1609,12 +1749,12 @@ pumpkin_plugin_api::register_plugin!(PexSkate);
 mod integration_tests {
     use super::{
         CLIENT_PROTOCOL_VERSION, COLLISION_BLOCKS_GLOBAL_PER_TICK, COLLISION_BLOCKS_PER_TICK,
-        COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, ServerState,
-        append_map_identity, append_visual, clear_skate_state, collision::CollisionScan,
-        collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
-        physics::Controls, player_collision_impact, sequence_is_newer, should_refresh_collision,
-        shove_impact, shove_pressed_edge, supports_client_protocol, swept_player_collision_impact,
-        take_collision_budget,
+        COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, PropWorldKey,
+        ServerState, append_map_identity, append_prop_updates, append_visual, clear_skate_state,
+        collision::CollisionScan, collision_refresh_needed, collision_work_order, engine,
+        initial_scan_recenter_needed, physics::Controls, player_collision_impact,
+        sequence_is_newer, should_refresh_collision, shove_impact, shove_pressed_edge,
+        supports_client_protocol, swept_player_collision_impact, take_collision_budget,
     };
     use engine::SkatePose;
     use std::time::{Duration, Instant};
@@ -1919,6 +2059,40 @@ mod integration_tests {
     }
 
     #[test]
+    fn shared_prop_world_identity_includes_world_map_and_props_digest() {
+        let props = "ab".repeat(32);
+        let key = PropWorldKey::new("world-a".into(), "University.skate", &props);
+        assert_eq!(
+            key,
+            PropWorldKey::new("world-a".into(), "university.SKATE", &props)
+        );
+        assert_ne!(
+            key,
+            PropWorldKey::new("world-b".into(), "University.skate", &props)
+        );
+        assert_ne!(
+            key,
+            PropWorldKey::new("world-a".into(), "Community.skate", &props)
+        );
+        assert_ne!(
+            key,
+            PropWorldKey::new("world-a".into(), "University.skate", &"cd".repeat(32))
+        );
+    }
+
+    #[test]
+    fn prop_translation_updates_have_a_bounded_big_endian_wire_layout() {
+        let mut payload = Vec::new();
+        append_prop_updates(&mut payload, &[(0x0123_4567_89AB_CDEF, [0.25, -1.5, 2.0])]);
+        assert_eq!(payload.len(), 22);
+        assert_eq!(&payload[..2], &1_u16.to_be_bytes());
+        assert_eq!(&payload[2..10], &0x0123_4567_89AB_CDEF_u64.to_be_bytes());
+        assert_eq!(&payload[10..14], &0.25_f32.to_be_bytes());
+        assert_eq!(&payload[14..18], &(-1.5_f32).to_be_bytes());
+        assert_eq!(&payload[18..22], &2.0_f32.to_be_bytes());
+    }
+
+    #[test]
     fn skate_data_sha256_matches_the_standard_digest_vector() {
         assert_eq!(
             skate_data::sha256_digest(b"abc"),
@@ -1929,6 +2103,19 @@ mod integration_tests {
     #[test]
     fn lifecycle_cleanup_removes_active_and_pending_player_state() {
         let mut state = ServerState::default();
+        let prop_key = PropWorldKey::new("world-1".into(), "University.skate", &"AB".repeat(32));
+        state
+            .prop_world_keys
+            .insert("rider".into(), prop_key.clone());
+        state
+            .prop_world_keys
+            .insert("other".into(), prop_key.clone());
+        state
+            .prop_worlds
+            .insert(prop_key.clone(), super::prop_physics::PropWorld::default());
+        state
+            .prop_world_advanced_at
+            .insert(prop_key.clone(), Instant::now());
         state.compatible_clients.insert("rider".into());
         state.enabled.insert("rider".into());
         state.map_backed.insert("rider".into());
@@ -1967,6 +2154,10 @@ mod integration_tests {
 
         assert!(clear_skate_state(&mut state, "rider"));
         assert!(!clear_skate_state(&mut state, "rider"));
+        assert!(state.prop_worlds.contains_key(&prop_key));
+        assert!(!clear_skate_state(&mut state, "other"));
+        assert!(!state.prop_worlds.contains_key(&prop_key));
+        assert!(!state.prop_world_advanced_at.contains_key(&prop_key));
         assert!(state.compatible_clients.contains("rider"));
         assert!(!state.enabled.contains("rider"));
         assert!(!state.map_backed.contains("rider"));
@@ -1981,6 +2172,7 @@ mod integration_tests {
         assert!(!state.collision_center.contains_key("rider"));
         assert!(!state.collision_scans.contains_key("rider"));
         assert!(!state.collision_poses.contains_key("rider"));
+        assert!(!state.prop_world_keys.contains_key("rider"));
     }
 
     #[test]

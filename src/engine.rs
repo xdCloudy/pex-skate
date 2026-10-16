@@ -56,6 +56,7 @@ pub const SKATER_BONE_NAMES: [&str; 36] = [
 
 pub struct SkateSession {
     session: Session,
+    prop_collision_instances: Vec<PropCollisionInstance>,
     bone_names: Vec<String>,
     bones_root_relative: Option<bool>,
     previous_respawn: bool,
@@ -64,6 +65,7 @@ pub struct SkateSession {
 
 #[derive(Clone, Debug)]
 struct PropCollisionInstance {
+    identity: u64,
     transform: [f32; 16],
     triangles: Vec<[[f32; 3]; 3]>,
 }
@@ -123,6 +125,7 @@ impl SkateSession {
         let initial_pose = session.activate(spawn, heading)?;
         Ok(Self {
             session,
+            prop_collision_instances: Vec::new(),
             bone_names: initial_pose.names,
             bones_root_relative: None,
             previous_respawn: false,
@@ -141,10 +144,14 @@ impl SkateSession {
         session.set_difficulty(load_difficulty(asset_root)?);
         let prop_collision_path = authored_prop_collision_path(asset_root, map_path)?;
         let instance_path = prop_collision_path.with_extension("instances");
-        let collision = match load_prop_collision_instances(&instance_path)? {
-            Some(instances) => Ok(prop_collision_triangles(&instances)?),
-            None => load_prop_collision(&prop_collision_path),
-        };
+        let (prop_collision_instances, collision) =
+            match load_prop_collision_instances(&instance_path)? {
+                Some(instances) => {
+                    let triangles = prop_collision_triangles(&instances)?;
+                    (instances, Ok(triangles))
+                }
+                None => (Vec::new(), load_prop_collision(&prop_collision_path)),
+            };
         match collision {
             Ok(triangles) if !triangles.is_empty() => {
                 let count = session.set_moving_collision(triangles)?;
@@ -163,6 +170,7 @@ impl SkateSession {
             .map_err(|error| format!("could not activate Skate map {:?}: {error}", map.name))?;
         Ok(Self {
             session,
+            prop_collision_instances,
             bone_names: initial_pose.names,
             bones_root_relative: None,
             previous_respawn: false,
@@ -207,6 +215,59 @@ impl SkateSession {
             triangles.extend(skater_collision_proxy(player));
         }
         self.session.set_player_collision(triangles)
+    }
+
+    /// Apply updates to authored DMO transforms and atomically rebuild their
+    /// moving collision. IDs are stable locator identities from PEXCOL3;
+    /// omitted instances keep their last transform.
+    pub fn update_prop_transforms(
+        &mut self,
+        transforms: &[(u64, [f32; 16])],
+    ) -> Result<usize, String> {
+        if transforms.is_empty() {
+            return Ok(self
+                .prop_collision_instances
+                .iter()
+                .map(|item| item.triangles.len())
+                .sum());
+        }
+        if transforms.len() == self.prop_collision_instances.len()
+            && transforms.iter().zip(&self.prop_collision_instances).all(
+                |((identity, transform), item)| {
+                    *identity == item.identity && *transform == item.transform
+                },
+            )
+        {
+            return Ok(self
+                .prop_collision_instances
+                .iter()
+                .map(|item| item.triangles.len())
+                .sum());
+        }
+        if !update_prop_instances(&mut self.prop_collision_instances, transforms)? {
+            return Ok(self
+                .prop_collision_instances
+                .iter()
+                .map(|item| item.triangles.len())
+                .sum());
+        }
+        let triangles = prop_collision_triangles(&self.prop_collision_instances)?;
+        self.session.set_moving_collision(triangles)
+    }
+
+    /// Collision-only DMO bodies used by the shared server prop simulation.
+    pub fn prop_physics_bodies(&self) -> Vec<crate::prop_physics::PropBody> {
+        self.prop_collision_instances
+            .iter()
+            .filter_map(|item| {
+                let bounds = prop_local_bounds(&item.triangles)?;
+                Some(crate::prop_physics::PropBody::new(
+                    item.identity,
+                    item.transform,
+                    bounds,
+                ))
+            })
+            .collect()
     }
 
     pub fn period(&self) -> f32 {
@@ -562,6 +623,7 @@ fn parse_prop_collision_instances(bytes: &[u8]) -> Result<Vec<PropCollisionInsta
         }
         total_triangles += triangle_count;
         instances.push(PropCollisionInstance {
+            identity,
             transform: matrix,
             triangles: local_triangles,
         });
@@ -626,6 +688,61 @@ fn prop_collision_triangles(
                 .map(|triangle| transform_prop_triangle(*triangle, &instance.transform))
         })
         .collect()
+}
+
+fn prop_local_bounds(triangles: &[[[f32; 3]; 3]]) -> Option<[f32; 6]> {
+    let mut bounds = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for point in triangles.iter().flatten() {
+        for axis in 0..3 {
+            bounds[axis] = bounds[axis].min(point[axis]);
+            bounds[axis + 3] = bounds[axis + 3].max(point[axis]);
+        }
+    }
+    bounds
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(bounds)
+}
+
+fn update_prop_instances(
+    instances: &mut [PropCollisionInstance],
+    transforms: &[(u64, [f32; 16])],
+) -> Result<bool, String> {
+    let mut updates = std::collections::HashMap::with_capacity(transforms.len());
+    let identities = instances
+        .iter()
+        .map(|instance| instance.identity)
+        .collect::<std::collections::HashSet<_>>();
+    for (identity, transform) in transforms {
+        if updates.insert(*identity, *transform).is_some() {
+            return Err(format!(
+                "duplicate authored prop transform ID {identity:016X}"
+            ));
+        }
+        validate_prop_transform(transform).map_err(|error| {
+            format!("invalid transform for authored prop {identity:016X}: {error}")
+        })?;
+        if !identities.contains(identity) {
+            return Err(format!(
+                "unknown authored prop transform ID {identity:016X}"
+            ));
+        }
+    }
+    let mut changed = false;
+    for instance in instances {
+        if let Some(transform) = updates.get(&instance.identity) {
+            changed |= instance.transform != *transform;
+            instance.transform = *transform;
+        }
+    }
+    Ok(changed)
 }
 
 fn parse_prop_collision(bytes: &[u8]) -> Result<Vec<[[f32; 3]; 3]>, String> {
@@ -798,6 +915,7 @@ mod tests {
         SkatePose, box_triangles, load_difficulty, load_prop_collision, parse_difficulty,
         parse_prop_collision, parse_prop_collision_instances, pressed_edge,
         prop_collision_triangles, quantize_rotation, skater_collision_proxy, to_engine_controls,
+        update_prop_instances,
     };
     use crate::physics::Controls;
 
@@ -1033,10 +1151,27 @@ mod tests {
             prop_collision_triangles(&instances).unwrap(),
             vec![[[10.0, 20.0, 30.0], [12.0, 20.0, 30.0], [10.0, 23.0, 30.0]]]
         );
-        instances[0].transform[12] += 2.0;
+        let identity = instances[0].identity;
+        let mut moved = instances[0].transform;
+        moved[12] += 2.0;
+        update_prop_instances(&mut instances, &[(identity, moved)]).unwrap();
         assert_eq!(
             prop_collision_triangles(&instances).unwrap()[0][0],
             [12.0, 20.0, 30.0]
+        );
+        let before_invalid_update = instances[0].transform;
+        let mut second = moved;
+        second[12] += 5.0;
+        assert!(
+            update_prop_instances(
+                &mut instances,
+                &[(identity, second), (identity.wrapping_add(1), moved)]
+            )
+            .is_err()
+        );
+        assert_eq!(instances[0].transform, before_invalid_update);
+        assert!(
+            update_prop_instances(&mut instances, &[(identity, moved), (identity, moved)]).is_err()
         );
         let mut duplicate = bytes.to_vec();
         let record = duplicate[12..].to_vec();

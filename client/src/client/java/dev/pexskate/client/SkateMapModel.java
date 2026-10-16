@@ -44,7 +44,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.InflaterInputStream;
 
-/** Static retail district renderer for the portable SKATE map package. */
+/** Authored district and per-instance DMO renderer for portable SKATE packages. */
 public final class SkateMapModel {
     private static final Logger LOGGER = LoggerFactory.getLogger("pexskate/map-model");
     private static final int MAX_MAP_BYTES = 768 * 1024 * 1024;
@@ -55,6 +55,7 @@ public final class SkateMapModel {
     private static final double DRAW_DISTANCE = 256.0;
     private static final List<Identifier> TEXTURES = new ArrayList<>();
     private static final Set<Integer> ACTIVE_MAP_SKATERS = ConcurrentHashMap.newKeySet();
+    private static final Map<PropInstanceKey, float[]> DYNAMIC_PROP_OFFSETS = new ConcurrentHashMap<>();
     private static volatile Model model;
     private static volatile String attemptedFilename;
     private static volatile String loadingFilename;
@@ -316,7 +317,7 @@ public final class SkateMapModel {
             int texture = primitive.textureIndex == 0 ? 0 : primitive.textureIndex + textureOffset;
             primitives.add(new PendingPrimitive(primitive.positions, primitive.normals, primitive.uv,
                     primitive.vertexIndirectLight, primitive.indices, primitive.bounds, texture, primitive.color,
-                    primitive.alphaMode));
+                    primitive.alphaMode, primitive.propInstanceId));
         }
         return new ParsedModel(district.filename, district.mapName, district.mapSha256, props.mapSha256,
                 List.copyOf(textures), List.copyOf(primitives), district.lights, district.sky, memoryEstimate);
@@ -371,11 +372,29 @@ public final class SkateMapModel {
 
     static void acceptState(int entityId, boolean active, boolean mapBacked) {
         if (active && mapBacked) ACTIVE_MAP_SKATERS.add(entityId);
-        else ACTIVE_MAP_SKATERS.remove(entityId);
+        else {
+            ACTIVE_MAP_SKATERS.remove(entityId);
+            if (ACTIVE_MAP_SKATERS.isEmpty()) DYNAMIC_PROP_OFFSETS.clear();
+        }
+    }
+
+    static void acceptPropTransforms(String filename, String propsSha256,
+                                     List<SkateStatePayload.PropTransform> updates) {
+        if (filename == null || filename.isBlank() || propsSha256 == null || propsSha256.isBlank()) return;
+        for (SkateStatePayload.PropTransform update : updates) {
+            if (Float.isFinite(update.x()) && Float.isFinite(update.y()) && Float.isFinite(update.z())
+                    && Math.abs(update.x()) <= 100_000.0f && Math.abs(update.y()) <= 100_000.0f
+                    && Math.abs(update.z()) <= 100_000.0f) {
+                DYNAMIC_PROP_OFFSETS.put(new PropInstanceKey(filename.toLowerCase(Locale.ROOT),
+                        propsSha256.toLowerCase(Locale.ROOT), update.identity()),
+                        new float[] {update.x(), update.y(), update.z()});
+            }
+        }
     }
 
     static void clearActive() {
         ACTIVE_MAP_SKATERS.clear();
+        DYNAMIC_PROP_OFFSETS.clear();
         if (model == null) attemptedFilename = null;
     }
 
@@ -407,6 +426,7 @@ public final class SkateMapModel {
                 primitives.add(new Primitive(primitive.positions, primitive.normals, primitive.uv,
                         primitive.vertexIndirectLight, primitive.indices, primitive.bounds,
                         task.textureIds[primitive.textureIndex], primitive.color, primitive.alphaMode,
+                        primitive.propInstanceId,
                         task.parsed.lights, sky));
             }
             model = new Model(task.parsed.filename, task.parsed.mapSha256, task.parsed.propsSha256,
@@ -440,24 +460,32 @@ public final class SkateMapModel {
         }
         List<Primitive> translucent = new ArrayList<>();
         for (Primitive primitive : current.primitives) {
-            if (primitive.distanceSquared(camera) > DRAW_DISTANCE * DRAW_DISTANCE) continue;
+            float[] offset = propOffset(current, primitive);
+            if (primitive.distanceSquared(camera, offset) > DRAW_DISTANCE * DRAW_DISTANCE) continue;
             if (primitive.alphaMode == 2) translucent.add(primitive);
-            else submitPrimitive(context, matrices, client, primitive, false);
+            else submitPrimitive(context, matrices, client, current, primitive, false);
         }
         translucent.sort(Comparator.comparingDouble(
-                (Primitive primitive) -> primitive.centerDistanceSquared(camera)).reversed());
-        for (Primitive primitive : translucent) submitPrimitive(context, matrices, client, primitive, true);
+                (Primitive primitive) -> primitive.centerDistanceSquared(camera, propOffset(current, primitive))).reversed());
+        for (Primitive primitive : translucent) submitPrimitive(context, matrices, client, current, primitive, true);
+    }
+
+    private static float[] propOffset(Model current, Primitive primitive) {
+        if (primitive.propInstanceId == 0L) return null;
+        return DYNAMIC_PROP_OFFSETS.get(new PropInstanceKey(current.filename.toLowerCase(Locale.ROOT),
+                current.propsSha256.toLowerCase(Locale.ROOT), primitive.propInstanceId));
     }
 
     private static void submitPrimitive(LevelRenderContext context, PoseStack matrices, Minecraft client,
-                                        Primitive primitive, boolean translucent) {
-        BlockPos lightPosition = primitive.lightSamplePosition();
+                                        Model current, Primitive primitive, boolean translucent) {
+        float[] offset = propOffset(current, primitive);
+        BlockPos lightPosition = primitive.lightSamplePosition(offset);
         int light = client.level.getBrightness(LightLayer.SKY, lightPosition) << 20
                 | client.level.getBrightness(LightLayer.BLOCK, lightPosition) << 4;
         context.submitNodeCollector().submitCustomGeometry(
                 matrices, translucent ? RenderTypes.entityTranslucent(primitive.texture)
                         : RenderTypes.entityCutout(primitive.texture),
-                (pose, vertices) -> primitive.draw(pose, vertices, light));
+                (pose, vertices) -> primitive.draw(pose, vertices, light, offset));
     }
 
     static void close() {
@@ -518,12 +546,14 @@ public final class SkateMapModel {
             throw new IOException("SKATE district geometry exceeds this client's parse memory budget");
         }
         long[] materialTextures = new long[materialCount];
+        long[] materialPropIds = new long[materialCount];
         long[] materialLightmaps = new long[materialCount];
         int[] materialAlphaModes = new int[materialCount];
         float[] materialLightmapStrengths = new float[materialCount];
         float[][] materialColors = new float[materialCount][4];
         for (int i = 0; i < materialCount; i++) {
-            reader.string();
+            String materialName = reader.string();
+            materialPropIds[i] = parsePropInstanceId(materialName, filename.endsWith("-props"));
             reader.u32(); // flags
             reader.skipFloats(2);
             materialColors[i][0] = reader.f32();
@@ -631,7 +661,7 @@ public final class SkateMapModel {
             int[] materialIndices = entry.getValue().toArray();
             primitives.add(new PendingPrimitive(positions, normals, uv, vertexIndirectLight,
                     materialIndices, primitiveBounds(positions, materialIndices), texture, materialColors[material],
-                    materialAlphaModes[material]));
+                    materialAlphaModes[material], materialPropIds[material]));
         }
         skipRails(reader, railCount);
         skipDoors(reader, doorCount, 14);
@@ -663,6 +693,17 @@ public final class SkateMapModel {
         if (sky != null) parsedMemoryEstimate += sky.positions.length * 4L + sky.indices.length * 4L;
         return new ParsedModel(filename, mapName, mapSha256, "", List.copyOf(textures), List.copyOf(primitives),
                 List.copyOf(lights), sky, parsedMemoryEstimate);
+    }
+
+    private static long parsePropInstanceId(String materialName, boolean propsPackage) throws IOException {
+        if (!propsPackage) return 0L;
+        int separator = materialName.indexOf('_');
+        if (separator != 16) throw new IOException("authored prop material has no 64-bit instance identity");
+        try {
+            return Long.parseUnsignedLong(materialName.substring(0, separator), 16);
+        } catch (NumberFormatException error) {
+            throw new IOException("authored prop material has an invalid instance identity", error);
+        }
     }
 
     private static void skipRails(Reader reader, long count) throws IOException {
@@ -947,7 +988,8 @@ public final class SkateMapModel {
     }
     private record PendingPrimitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight,
                                     int[] indices, float[] bounds,
-                                    int textureIndex, float[] color, int alphaMode) {}
+                                    int textureIndex, float[] color, int alphaMode, long propInstanceId) {}
+    private record PropInstanceKey(String filename, String propsSha256, long identity) {}
     private record ChunkMaterial(int material, int x, int z) {}
 
     private static final class Sky {
@@ -1032,12 +1074,14 @@ public final class SkateMapModel {
         private final Identifier texture;
         private final float[] bounds;
         private final int alphaMode;
+        private final long propInstanceId;
         private final List<AuthoredLight> lights;
         private final float[] sunDirection;
         private final float sunIntensity;
 
         private Primitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight, int[] indices,
                           float[] bounds, Identifier texture, float[] color, int alphaMode,
+                          long propInstanceId,
                           List<AuthoredLight> authoredLights, Sky sky) {
             this.positions = positions;
             this.normals = normals;
@@ -1048,39 +1092,46 @@ public final class SkateMapModel {
             this.color = color.clone();
             this.bounds = bounds;
             this.alphaMode = alphaMode;
+            this.propInstanceId = propInstanceId;
             this.lights = authoredLights.stream()
-                    .filter(value -> distanceSquared(value.position) <= value.range * value.range)
+                    .filter(value -> distanceSquared(value.position, null) <= value.range * value.range)
                     .toList();
             this.sunDirection = sky == null ? null : sky.sunDirection;
             this.sunIntensity = sky == null ? 0.0f : Math.min(1.0f, sky.sunScale * sky.exposure);
         }
 
-        private double distanceSquared(Vec3 point) {
+        private double distanceSquared(Vec3 point, float[] offset) {
             double distance = 0.0;
             for (int axis = 0; axis < 3; axis++) {
                 double value = axis == 0 ? point.x : axis == 1 ? point.y : point.z;
-                double delta = value < bounds[axis] ? bounds[axis] - value
-                        : value > bounds[axis + 3] ? value - bounds[axis + 3] : 0.0;
+                float move = offset == null ? 0.0f : offset[axis];
+                double minimum = bounds[axis] + move;
+                double maximum = bounds[axis + 3] + move;
+                double delta = value < minimum ? minimum - value
+                        : value > maximum ? value - maximum : 0.0;
                 distance += delta * delta;
             }
             return distance;
         }
 
-        private double centerDistanceSquared(Vec3 point) {
-            double dx = (bounds[0] + bounds[3]) * 0.5 - point.x;
-            double dy = (bounds[1] + bounds[4]) * 0.5 - point.y;
-            double dz = (bounds[2] + bounds[5]) * 0.5 - point.z;
+        private double centerDistanceSquared(Vec3 point, float[] offset) {
+            double dx = (bounds[0] + bounds[3]) * 0.5 + (offset == null ? 0.0f : offset[0]) - point.x;
+            double dy = (bounds[1] + bounds[4]) * 0.5 + (offset == null ? 0.0f : offset[1]) - point.y;
+            double dz = (bounds[2] + bounds[5]) * 0.5 + (offset == null ? 0.0f : offset[2]) - point.z;
             return dx * dx + dy * dy + dz * dz;
         }
 
-        private BlockPos lightSamplePosition() {
+        private BlockPos lightSamplePosition(float[] offset) {
             return BlockPos.containing(
-                    (bounds[0] + bounds[3]) * 0.5,
-                    (bounds[1] + bounds[4]) * 0.5,
-                    (bounds[2] + bounds[5]) * 0.5);
+                    (bounds[0] + bounds[3]) * 0.5 + (offset == null ? 0.0f : offset[0]),
+                    (bounds[1] + bounds[4]) * 0.5 + (offset == null ? 0.0f : offset[1]),
+                    (bounds[2] + bounds[5]) * 0.5 + (offset == null ? 0.0f : offset[2]));
         }
 
-        private void draw(PoseStack.Pose pose, VertexConsumer output, int light) {
+        private void draw(PoseStack.Pose pose, VertexConsumer output, int light, float[] offset) {
+            float offsetX = offset == null ? 0.0f : offset[0];
+            float offsetY = offset == null ? 0.0f : offset[1];
+            float offsetZ = offset == null ? 0.0f : offset[2];
             Vector3f normal = new Vector3f();
             for (int index : indices) {
                 int point = index * 3;
@@ -1098,7 +1149,9 @@ public final class SkateMapModel {
                     blue += sun;
                 }
                 if (!lights.isEmpty()) {
-                    float x = positions[point], y = positions[point + 1], z = positions[point + 2];
+                    float x = positions[point] + offsetX;
+                    float y = positions[point + 1] + offsetY;
+                    float z = positions[point + 2] + offsetZ;
                     for (AuthoredLight authored : lights) {
                         double dx = authored.position.x - x;
                         double dy = authored.position.y - y;
@@ -1125,7 +1178,8 @@ public final class SkateMapModel {
                         blue += authored.color[2] * amount;
                     }
                 }
-                output.addVertex(pose, positions[point], positions[point + 1], positions[point + 2])
+                output.addVertex(pose, positions[point] + offsetX,
+                                positions[point + 1] + offsetY, positions[point + 2] + offsetZ)
                         .setColor(Math.min(1.0f, red), Math.min(1.0f, green), Math.min(1.0f, blue), color[3])
                         .setUv(uv[texCoord], uv[texCoord + 1])
                         .setLight(light)
