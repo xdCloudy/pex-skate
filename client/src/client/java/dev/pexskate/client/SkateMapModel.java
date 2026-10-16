@@ -319,7 +319,7 @@ public final class SkateMapModel {
                     primitive.alphaMode));
         }
         return new ParsedModel(district.filename, district.mapName, district.mapSha256, props.mapSha256,
-                List.copyOf(textures), List.copyOf(primitives), district.sky, memoryEstimate);
+                List.copyOf(textures), List.copyOf(primitives), district.lights, district.sky, memoryEstimate);
     }
 
     private static Path selectMapByFilename(String filename, Path maps) throws IOException {
@@ -404,7 +404,8 @@ public final class SkateMapModel {
             for (PendingPrimitive primitive : task.parsed.primitives) {
                 primitives.add(new Primitive(primitive.positions, primitive.normals, primitive.uv,
                         primitive.vertexIndirectLight, primitive.indices, primitive.bounds,
-                        task.textureIds[primitive.textureIndex], primitive.color, primitive.alphaMode));
+                        task.textureIds[primitive.textureIndex], primitive.color, primitive.alphaMode,
+                        task.parsed.lights));
             }
             PendingSky pendingSky = task.parsed.sky;
             Sky sky = pendingSky == null ? null : new Sky(pendingSky, task.textureIds[pendingSky.diffuseTextureIndex]);
@@ -634,7 +635,7 @@ public final class SkateMapModel {
         }
         skipRails(reader, railCount);
         skipDoors(reader, doorCount, 14);
-        skipLights(reader, lightCount);
+        List<AuthoredLight> lights = readLights(reader, lightCount);
         skipRoutes(reader, routeCount);
         PendingSky sky = null;
         int extensionCount = checkedInt(reader.u32(), 20, "map extension count");
@@ -660,7 +661,8 @@ public final class SkateMapModel {
         }
         long parsedMemoryEstimate = geometryMemoryEstimate + (texturePixels + (sky == null ? 0 : sky.texturePixels)) * 4L;
         if (sky != null) parsedMemoryEstimate += sky.positions.length * 4L + sky.indices.length * 4L;
-        return new ParsedModel(filename, mapName, mapSha256, "", List.copyOf(textures), List.copyOf(primitives), sky, parsedMemoryEstimate);
+        return new ParsedModel(filename, mapName, mapSha256, "", List.copyOf(textures), List.copyOf(primitives),
+                List.copyOf(lights), sky, parsedMemoryEstimate);
     }
 
     private static void skipRails(Reader reader, long count) throws IOException {
@@ -697,12 +699,40 @@ public final class SkateMapModel {
         }
     }
 
-    private static void skipLights(Reader reader, long count) throws IOException {
+    private static List<AuthoredLight> readLights(Reader reader, long count) throws IOException {
+        if (count > 64) throw new IOException("SKATE map has too many authored lights");
+        List<AuthoredLight> lights = new ArrayList<>((int) count);
         for (long i = 0; i < count; i++) {
-            reader.string();
-            reader.skipU32(1); // light type
-            reader.skipFloats(14); // position, direction, color, intensity, range, radius, cone
+            String name = reader.string();
+            long kind = reader.u32();
+            if (kind > 2) throw new IOException("unsupported SKATE authored light type " + kind);
+            float[] values = new float[14];
+            for (int value = 0; value < values.length; value++) values[value] = reader.f32();
+            for (float value : values) {
+                if (!Float.isFinite(value)) throw new IOException("non-finite SKATE authored light " + name);
+            }
+            float range = values[10];
+            if (range <= 0.0f || values[9] < 0.0f || values[11] < 0.0f
+                    || values[12] < -1.0f || values[12] > 1.0f
+                    || values[13] < -1.0f || values[13] > 1.0f || range > 8192.0f
+                    || values[9] > 1_000_000.0f || values[11] > range
+                    || values[6] < 0.0f || values[7] < 0.0f || values[8] < 0.0f) {
+                throw new IOException("invalid SKATE authored light " + name);
+            }
+            Vec3 direction = new Vec3(values[3], values[4], values[5]);
+            if (kind != 0) {
+                if (direction.lengthSqr() < 1.0e-8) {
+                    throw new IOException("directional SKATE authored light has no direction: " + name);
+                }
+                direction = direction.normalize();
+            }
+            lights.add(new AuthoredLight((int) kind,
+                    new Vec3(values[0], values[1], values[2]),
+                    direction,
+                    new float[] {values[6], values[7], values[8]}, values[9], range,
+                    values[11], values[12], values[13]));
         }
+        return lights;
     }
 
     private static void skipRoutes(Reader reader, long count) throws IOException {
@@ -891,7 +921,11 @@ public final class SkateMapModel {
                               float red, float green, float blue) {}
     private record ParsedModel(String filename, String mapName, String mapSha256, String propsSha256,
                                List<TextureData> textures,
-                               List<PendingPrimitive> primitives, PendingSky sky, long memoryEstimate) {}
+                               List<PendingPrimitive> primitives, List<AuthoredLight> lights,
+                               PendingSky sky, long memoryEstimate) {}
+    private record AuthoredLight(int kind, Vec3 position, Vec3 direction, float[] color,
+                                 float intensity, float range, float radius,
+                                 float innerCos, float outerCos) {}
     private record PendingSky(float[] positions, float[] uv, int[] indices,
                               float fogNear, float fogFar, float fogPower, float fogMaximum,
                               float[] fogColor, float[] sunDirection, float sunScale, float exposure,
@@ -990,9 +1024,11 @@ public final class SkateMapModel {
         private final Identifier texture;
         private final float[] bounds;
         private final int alphaMode;
+        private final List<AuthoredLight> lights;
 
         private Primitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight, int[] indices,
-                          float[] bounds, Identifier texture, float[] color, int alphaMode) {
+                          float[] bounds, Identifier texture, float[] color, int alphaMode,
+                          List<AuthoredLight> authoredLights) {
             this.positions = positions;
             this.normals = normals;
             this.uv = uv;
@@ -1002,6 +1038,9 @@ public final class SkateMapModel {
             this.color = color.clone();
             this.bounds = bounds;
             this.alphaMode = alphaMode;
+            this.lights = authoredLights.stream()
+                    .filter(value -> distanceSquared(value.position) <= value.range * value.range)
+                    .toList();
         }
 
         private double distanceSquared(Vec3 point) {
@@ -1036,10 +1075,39 @@ public final class SkateMapModel {
                 int texCoord = index * 2;
                 normal.set(normals[point], normals[point + 1], normals[point + 2]);
                 pose.normal().transform(normal).normalize();
+                float red = color[0] * vertexIndirectLight[point];
+                float green = color[1] * vertexIndirectLight[point + 1];
+                float blue = color[2] * vertexIndirectLight[point + 2];
+                if (!lights.isEmpty()) {
+                    float x = positions[point], y = positions[point + 1], z = positions[point + 2];
+                    for (AuthoredLight authored : lights) {
+                        double dx = authored.position.x - x;
+                        double dy = authored.position.y - y;
+                        double dz = authored.position.z - z;
+                        double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                        if (distance < 1.0e-5 || distance >= authored.range) continue;
+                        float edge = (float) (1.0 - distance / authored.range);
+                        float attenuation = authored.intensity * edge * edge
+                                / (1.0f + (float) Math.pow(Math.max(0.0, distance - authored.radius), 2.0) * 0.08f);
+                        if (authored.kind == 1) {
+                            double cone = -(authored.direction.x * dx + authored.direction.y * dy
+                                    + authored.direction.z * dz) / distance;
+                            float coneAttenuation = authored.innerCos == authored.outerCos
+                                    ? (cone >= authored.innerCos ? 1.0f : 0.0f)
+                                    : (float) Math.clamp((cone - authored.outerCos)
+                                            / (authored.innerCos - authored.outerCos), 0.0, 1.0);
+                            attenuation *= coneAttenuation;
+                        }
+                        float diffuse = Math.max(0.0f, (float) (normal.x * dx
+                                + normal.y * dy + normal.z * dz) / (float) distance);
+                        float amount = attenuation * diffuse;
+                        red += authored.color[0] * amount;
+                        green += authored.color[1] * amount;
+                        blue += authored.color[2] * amount;
+                    }
+                }
                 output.addVertex(pose, positions[point], positions[point + 1], positions[point + 2])
-                        .setColor(color[0] * vertexIndirectLight[point],
-                                color[1] * vertexIndirectLight[point + 1],
-                                color[2] * vertexIndirectLight[point + 2], color[3])
+                        .setColor(Math.min(1.0f, red), Math.min(1.0f, green), Math.min(1.0f, blue), color[3])
                         .setUv(uv[texCoord], uv[texCoord + 1])
                         .setLight(light)
                         .setNormal(normal.x, normal.y, normal.z);
