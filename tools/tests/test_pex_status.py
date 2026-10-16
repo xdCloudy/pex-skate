@@ -6,6 +6,7 @@ import threading
 import unittest
 
 from tools import check_pex_status
+from tools import test_pex_payload_client
 
 
 def read_frame(stream: socket.socket) -> bytes:
@@ -57,6 +58,17 @@ class PexStatusHandshakeTests(unittest.TestCase):
         if failure:
             raise failure[0]
         self.assertEqual(actual, response)
+
+
+class MinecraftClientProtocolTests(unittest.TestCase):
+    def test_varints_round_trip_for_protocol_packet_ids_and_signed_values(self) -> None:
+        values = (0, 1, 127, 128, 777, 2**31 - 1, -1)
+        for value in values:
+            with self.subTest(value=value):
+                packet = test_pex_payload_client.encode_varint(value)
+                decoded, offset = test_pex_payload_client.decode_varint(packet)
+                self.assertEqual(decoded, value)
+                self.assertEqual(offset, len(packet))
 
 
 if __name__ == "__main__":

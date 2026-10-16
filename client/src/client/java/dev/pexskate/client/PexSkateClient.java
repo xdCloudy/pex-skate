@@ -63,7 +63,9 @@ public final class PexSkateClient implements ClientModInitializer {
     private static final KeyMapping SHOVE = flickKey("key.pexskate.shove", InputConstants.KEY_V);
 
     private static volatile boolean skateModeActive;
+    private static final byte CLIENT_PROTOCOL_VERSION = 8;
     private boolean skating;
+    private volatile boolean serverProtocolReady;
     private CameraType previousCamera;
     private long gamepadHandle;
     private boolean gamepadSubsystemReady;
@@ -84,7 +86,13 @@ public final class PexSkateClient implements ClientModInitializer {
         gamepadSubsystemReady = SDLInit.SDL_InitSubSystem(SDLInit.SDL_INIT_GAMEPAD);
         PayloadTypeRegistry.serverboundPlay().register(ClientHelloPayload.TYPE, ClientHelloPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(ControlPayload.TYPE, ControlPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(ServerHelloAckPayload.TYPE, ServerHelloAckPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(SkateStatePayload.TYPE, SkateStatePayload.CODEC);
+        ClientPlayNetworking.registerGlobalReceiver(ServerHelloAckPayload.TYPE, (payload, context) -> {
+            if (payload.version() == CLIENT_PROTOCOL_VERSION) {
+                context.client().execute(() -> serverProtocolReady = true);
+            }
+        });
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
             if (payload.version() >= 4 && payload.version() <= 11) {
                 context.client().execute(() -> {
@@ -121,12 +129,14 @@ public final class PexSkateClient implements ClientModInitializer {
             SkateSkaterModel.load();
         });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            serverProtocolReady = false;
             nextControlSequence = 0;
             outstandingControls.clear();
             SkatePoseCache.resetInputRoundTrip();
-            ClientPlayNetworking.send(new ClientHelloPayload((byte) 7));
+            ClientPlayNetworking.send(new ClientHelloPayload(CLIENT_PROTOCOL_VERSION));
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            serverProtocolReady = false;
             clearBoards();
             outstandingControls.clear();
             nextControlSequence = 0;
@@ -265,7 +275,7 @@ public final class PexSkateClient implements ClientModInitializer {
             client.player.connection.sendCommand("skate");
         }
 
-        if (!skating || client.player == null || client.getConnection() == null) {
+        if (!skating || !serverProtocolReady || client.player == null || client.getConnection() == null) {
             clearStaleBoards(client);
             return;
         }

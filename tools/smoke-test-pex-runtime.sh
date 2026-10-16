@@ -33,6 +33,8 @@ cp "$plugin" "$work_dir/plugins/pex-skate.wasm"
 plugin_sha256=$(sha256sum "$work_dir/plugins/pex-skate.wasm" | cut -d ' ' -f 1)
 printf '{"entries":{"%s":{"permissions_requested":["fs.read.data"],"approved":true}}}\n' \
   "$plugin_sha256" > "$work_dir/plugins/permission_cache.json"
+printf 'online-mode=false\nenable-status=true\nserver-port=25565\nmax-players=8\n' \
+  > "$work_dir/server.properties"
 
 cd "$work_dir"
 "$work_dir/$server_name" > server.log 2>&1 &
@@ -71,5 +73,6 @@ if [[ -z "$module_cache" ]]; then
   exit 1
 fi
 
+python3 "$script_dir/test_pex_payload_client.py"
 python3 "$script_dir/check_pex_status.py"
-echo "PEX $server_version loaded pex-skate.wasm, compiled its Wasmtime module, and passed the Minecraft 26.3 status handshake."
+echo "PEX $server_version loaded pex-skate.wasm, accepted an offline Minecraft 26.3 player, acknowledged the PEX Skate payload, and passed the status handshake."

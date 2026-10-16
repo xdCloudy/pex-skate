@@ -35,7 +35,7 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
-const CLIENT_PROTOCOL_VERSION: u8 = 7;
+const CLIENT_PROTOCOL_VERSION: u8 = 8;
 const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 
 fn server_state() -> &'static Mutex<ServerState> {
@@ -600,10 +600,17 @@ impl EventHandler<PlayerCustomPayloadEvent> for SkateInput {
         event: pumpkin_plugin_api::events::EventData<PlayerCustomPayloadEvent>,
     ) -> pumpkin_plugin_api::events::EventData<PlayerCustomPayloadEvent> {
         if event.channel == "pexskate:hello" {
-            if supports_client_protocol(&event.data)
-                && let Ok(mut state) = server_state().lock()
-            {
-                state.compatible_clients.insert(event.player.get_name());
+            if supports_client_protocol(&event.data) {
+                let accepted = server_state()
+                    .lock()
+                    .map(|mut state| {
+                        state.compatible_clients.insert(event.player.get_name());
+                    })
+                    .is_ok();
+                if accepted && let Some(java_player) = event.player.as_java() {
+                    java_player
+                        .send_custom_payload("pexskate:hello_ack", &[CLIENT_PROTOCOL_VERSION]);
+                }
             }
             return event;
         }
@@ -2094,6 +2101,7 @@ mod integration_tests {
     #[test]
     fn handshake_requires_the_supported_client_protocol_version() {
         assert!(supports_client_protocol(&[CLIENT_PROTOCOL_VERSION]));
+        assert!(!supports_client_protocol(&[7]));
         assert!(!supports_client_protocol(&[4]));
         assert!(!supports_client_protocol(&[1]));
         assert!(!supports_client_protocol(&[2]));
