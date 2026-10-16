@@ -35,6 +35,7 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
+const MAX_PROP_UPDATES: usize = 8_192;
 const CLIENT_PROTOCOL_VERSION: u8 = 6;
 const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 
@@ -1604,7 +1605,7 @@ fn broadcast_pose(
 }
 
 fn append_prop_updates(payload: &mut Vec<u8>, updates: &[(u64, [f32; 3])]) {
-    let count = updates.len().min(u16::MAX as usize);
+    let count = updates.len().min(MAX_PROP_UPDATES);
     payload.extend_from_slice(&(count as u16).to_be_bytes());
     for (identity, translation) in updates.iter().take(count) {
         payload.extend_from_slice(&identity.to_be_bytes());
@@ -2090,6 +2091,15 @@ mod integration_tests {
         assert_eq!(&payload[10..14], &0.25_f32.to_be_bytes());
         assert_eq!(&payload[14..18], &(-1.5_f32).to_be_bytes());
         assert_eq!(&payload[18..22], &2.0_f32.to_be_bytes());
+    }
+
+    #[test]
+    fn prop_translation_updates_match_the_client_count_limit() {
+        let updates = vec![(1, [0.0; 3]); 8_193];
+        let mut payload = Vec::new();
+        append_prop_updates(&mut payload, &updates);
+        assert_eq!(u16::from_be_bytes([payload[0], payload[1]]), 8_192);
+        assert_eq!(payload.len(), 2 + 8_192 * (8 + 3 * 4));
     }
 
     #[test]
