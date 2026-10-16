@@ -124,4 +124,5 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*
+          body_path: release/RELEASE_NOTES.md
           prerelease: true

@@ -315,6 +315,11 @@ public final class PexSkateClient implements ClientModInitializer {
     private Gamepad readGamepad() {
         if (!gamepadSubsystemReady) return Gamepad.NONE;
 
+        // Minecraft owns the window event loop, so this client never polls
+        // SDL events. SDL requires an explicit update when reading device
+        // state outside an SDL event loop.
+        SDLGamepad.SDL_UpdateGamepads();
+
         if (gamepadHandle != 0L && !SDLGamepad.SDL_GamepadConnected(gamepadHandle)) {
             SDLGamepad.SDL_CloseGamepad(gamepadHandle);
             gamepadHandle = 0L;
