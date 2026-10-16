@@ -3,6 +3,6 @@
   "minVersion": "0.8",
   "package": "dev.pexskate.client.mixin",
   "compatibilityLevel": "JAVA_21",
-  "client": ["PlayerModelPoseMixin", "SkateCameraMixin", "SkateKeyConflictMixin", "SkateSkaterBodyMixin"],
+  "client": ["PlayerModelPoseMixin", "SkateCameraMixin", "SkateDistrictFogMixin", "SkateKeyConflictMixin", "SkateSkaterBodyMixin"],
   "injectors": {"defaultRequire": 1}
 }

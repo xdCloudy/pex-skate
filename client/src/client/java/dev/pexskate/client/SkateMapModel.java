@@ -44,7 +44,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.InflaterInputStream;
 
 /** Static retail district renderer for the portable SKATE map package. */
-final class SkateMapModel {
+public final class SkateMapModel {
     private static final Logger LOGGER = LoggerFactory.getLogger("pexskate/map-model");
     private static final int MAX_MAP_BYTES = 768 * 1024 * 1024;
     private static final int MAX_VERTICES = 8_000_000;
@@ -239,6 +239,13 @@ final class SkateMapModel {
     }
 
     static boolean isReady() { return model != null; }
+
+    public static FogSettings localFogSettings() {
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null || !ACTIVE_MAP_SKATERS.contains(client.player.getId())) return null;
+        Model current = model;
+        return current == null || current.sky == null ? null : current.sky.fogSettings();
+    }
 
     static void tick(Minecraft client) {
         UploadTask task = uploadTask;
@@ -683,6 +690,8 @@ final class SkateMapModel {
     }
 
     private record Model(String filename, List<Primitive> primitives, Sky sky) {}
+    public record FogSettings(float near, float far, float power, float maximum,
+                              float red, float green, float blue) {}
     private record ParsedModel(String filename, String mapName, List<TextureData> textures,
                                List<PendingPrimitive> primitives, PendingSky sky) {}
     private record PendingSky(float[] positions, float[] uv, int[] indices,
@@ -744,6 +753,11 @@ final class SkateMapModel {
                         .setLight(0x00F000F0)
                         .setNormal(normal.x, normal.y, normal.z);
             }
+        }
+
+        private FogSettings fogSettings() {
+            return new FogSettings(fogNear, fogFar, fogPower, fogMaximum,
+                    fogColor[0], fogColor[1], fogColor[2]);
         }
     }
 
