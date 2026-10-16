@@ -44,6 +44,55 @@ def write_textures(output,root,textures):
             name=next(names,None)
             if name is not None:pending.append(pool.submit(packed_texture,root,name,textures[name]))
 
+def _record_vec3(record,key):
+    values=record.get(key)
+    if not isinstance(values,(list,tuple)) or len(values)!=3:
+        raise ValueError(f'Invalid authored {key} vector')
+    result=tuple(float(value) for value in values)
+    if not all(np.isfinite(value) for value in result):
+        raise ValueError(f'Non-finite authored {key} vector')
+    return result
+
+def _record_name(record,label):
+    name=record.get('name')
+    if not isinstance(name,str) or not name or len(name.encode('utf-8'))>1_048_576:
+        raise ValueError(f'Invalid authored {label} name')
+    return name
+
+def encode_world_records(lights,routes):
+    """Encode authored SKATE14 lights and NPC routes from a map manifest."""
+    if not isinstance(lights,list) or len(lights)>64:
+        raise ValueError('Invalid authored light record count')
+    if not isinstance(routes,list) or len(routes)>24:
+        raise ValueError('Invalid authored NPC route count')
+    output=io.BytesIO()
+    for light in lights:
+        if not isinstance(light,dict):raise ValueError('Invalid authored light record')
+        name=_record_name(light,'light')
+        kind=light.get('kind')
+        if isinstance(kind,bool) or not isinstance(kind,int) or kind not in (0,1,2):
+            raise ValueError(f'Invalid authored light identity for {name}')
+        position=_record_vec3(light,'position');direction=_record_vec3(light,'direction');colour=_record_vec3(light,'color')
+        intensity=float(light.get('intensity',-1));light_range=float(light.get('range',0))
+        radius=float(light.get('radius',-1));inner=float(light.get('inner_cos',2));outer=float(light.get('outer_cos',2))
+        values=(*position,*direction,*colour,intensity,light_range,radius,inner,outer)
+        if not all(np.isfinite(value) for value in values) or intensity<0 or light_range<=0 or radius<0 or not -1<=inner<=1 or not -1<=outer<=1:
+            raise ValueError(f'Invalid authored light values for {name}')
+        string(output,name);u(output,kind);floats(output,*values)
+    for route in routes:
+        if not isinstance(route,dict):raise ValueError('Invalid authored NPC route record')
+        name=_record_name(route,'NPC route');closed=route.get('closed',False)
+        skaters=route.get('skaters',0);speed=float(route.get('speed',0));spacing=float(route.get('spacing',0))
+        points=route.get('points')
+        if not isinstance(closed,bool) or isinstance(skaters,bool) or not isinstance(skaters,int) or not 0<=skaters<=0xFFFFFFFF:
+            raise ValueError(f'Invalid authored NPC route identity for {name}')
+        if not isinstance(points,list) or not 2<=len(points)<=1_000_000 or not np.isfinite(speed) or not np.isfinite(spacing) or speed<0 or spacing<0:
+            raise ValueError(f'Invalid authored NPC route values for {name}')
+        normalized=[_record_vec3({'point':point},'point') for point in points]
+        string(output,name);u(output,int(closed),skaters);floats(output,speed,spacing);u(output,len(normalized))
+        for point in normalized:floats(output,*point)
+    return len(lights),len(routes),output.getvalue()
+
 def sky_extension(sky_json):
     if sky_json is None or not sky_json.is_file():return None
     sky=json.loads(sky_json.read_text(encoding='utf-8'))
@@ -208,10 +257,10 @@ def write(manifest_path,output,collision,report=lambda _:None, *, render_only=Fa
     environment=[.10,.36,.75,.64,.82,1.,.18,.24,.30,0.,11.,0.,18.,0.,
                  .045,.10,.26,1.,.32,.10,.05,.035,.06,.007,.015,.045,.045,.085,.17,.008,.014,.032,
                  1.,.96,.86,.42,.56,.92,1.,.18,.34,.10,1.,1.,1.]
-    rails=m['grind_splines'];output.parent.mkdir(parents=True,exist_ok=True)
+    rails=m['grind_splines'];light_count,route_count,world_records=encode_world_records(m.get('lights',[]),m.get('routes',[]));output.parent.mkdir(parents=True,exist_ok=True)
     with output.open('wb') as f:
         f.write(b'SKATE14\0');u(f,0x12345678);string(f,m['map_name']);floats(f,*spawn,0.,*environment)
-        u(f,nm,len(ids),nv,ni,0,len(rails),0,0,0);f.write(mats.getvalue())
+        u(f,nm,len(ids),nv,ni,0,len(rails),0,light_count,route_count);f.write(mats.getvalue())
         write_textures(f,root,textures)
         stored(f,vertices.getvalue());stored(f,indices.getvalue());stored(f,b'')
         for rail in rails:
@@ -222,6 +271,7 @@ def write(manifest_path,output,collision,report=lambda _:None, *, render_only=Fa
                 raw=bytes.fromhex(segment)
                 if len(raw)!=120:raise ValueError('Invalid native spline segment')
                 f.write(np.frombuffer(raw,dtype='>u4').astype('<u4').tobytes())
+        f.write(world_records)
         extensions=[(b'WMET',json.dumps(m,separators=(',',':')).encode())]
         if not render_only:extensions.insert(0,(b'RWCM',collision.read_bytes()))
         sky=sky_extension(sky_json)
