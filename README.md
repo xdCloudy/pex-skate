@@ -51,8 +51,8 @@ The release converter is a portable Windows executable. It takes a user-provided
 1. Install the PEX plugin on the server and start it once. This creates `<server>/plugins/data/pex-skate/`. Stop the server before installing game data.
 2. Download and extract the complete `PEX-Skate-ISO-Setup-Windows.zip` from the [GitHub releases](https://github.com/xdCloudy/pex-skate/releases). Keep `Install-PEXSkateData.bat`, `Install-PEXSkateData.ps1`, and `skategm-convert.exe` together in the extracted folder; the batch file expects the executable beside it.
 3. Run `Install-PEXSkateData.bat`. In the file picker, select your legally obtained Skate 3 Xbox 360 `.iso`. Select the PEX plugin data folder itself, normally `<server>/plugins/data/pex-skate/` (not its `private/` subfolder), or cancel for client-only model setup. The next picker can target a local Minecraft instance's `config/` folder so the converted skater model is installed at `config/pex-skate/private/skater.glb` for rendering on that client. Each client that should see the retail character must install its own converted model locally.
-4. The converter scans the ISO and extracts the required files into a temporary working folder. It converts animation banks, gameplay/state graphs and input settings, physics skeleton data, skater collections, the default skater model and textures, and available Skate 3 trick-display assets. It then checks for required outputs, including `private/game.json`, `private/stock/physics-skeletons.json`, `private/stock/skater-collections.json`, and `private/skater.glb`.
-5. After validation, the installer moves the generated `assets/private/` tree into `<plugin-data>/private/` and writes `conversion.log` when a server data folder was selected. If `private/` already exists, it asks before replacing those converted assets; other files in the plugin data folder are kept. If you selected a client config folder, it also installs the extracted `skater.glb` there after asking before replacement. Temporary ISO extracts are removed after conversion.
+4. The converter reads the ISO's XDVDFS filesystem and extracts only the inputs this port needs (`default.xex`, `data/anim/`, `data/big/miscload.big`, `data/big/miscboot.big`, `data/big/db.big`, `data/big/fedata.big`, `data/big/fetexture.big`, and `data/content/createacharacter.big`) into a temporary folder beside the selected output. It converts animation banks, gameplay/state graphs and input settings, physics skeleton data, skater collections, the default skater model and textures, and the available Skate 3 trick-display assets. Before installation, it checks the required files, including `private/game.json`, `private/stock/data/config/input.cfg`, `private/stock/physics-skeletons.json`, `private/stock/skater-collections.json`, and `private/skater.glb`.
+5. After validation, the installer moves the generated `assets/private/` tree into `<plugin-data>/private/` and writes `conversion.log` in the selected server data folder. If `private/` already exists, it asks before replacing that converted-asset folder; other files in the plugin data folder are kept, and the old `private/` folder is restored if installing the new one fails. If you selected a client config folder, it also installs the extracted `skater.glb` to `config/pex-skate/private/skater.glb` after asking before replacement. Temporary ISO extracts and staging files are removed after conversion.
 6. Restart the server. The plugin needs the converted data before Skate mode can run; `/skate` reports a readable error if required files are missing.
 
 The conversion runs locally: the ISO and converted game data are not uploaded, committed, or included in the release. The release ZIP includes the corresponding exporter source and third-party notices. The helper currently targets Windows and runs without a separate Python install. Keep enough free disk space for temporary extraction and conversion. If the server is remote, run the helper where its data folder is accessible, use a mounted server directory, or copy the generated `private/` folder to `<server>/plugins/data/pex-skate/` after conversion. If the client model was not installed by the helper, copy `private/skater.glb` to `<minecraft-instance>/config/pex-skate/private/skater.glb` on that client.
@@ -81,12 +81,12 @@ The server command `/skate` is also available for server-side toggling. The defa
 
 ## Controls
 
-PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keyboard mappings follow [SkateGM's documented keyboard layout](https://github.com/the-schwilliam/SkateGM#keyboard) where the PEX port supports the action. A standard gamepad recognized by SDL3 is polled directly; for controllers SDL3 does not recognize, use a mapping/remapper that exposes a standard gamepad layout.
+PEX Skate uses Skate 3's push, brake, steering, grabs, board dismount, and Flick-It trick inputs. The keyboard reference below follows [SkateGM's documented keyboard layout](https://github.com/the-schwilliam/SkateGM#keyboard); the status column shows which actions this PEX port currently sends to the Skate simulation. PEX Skate polls the first controller SDL3 recognizes as a standard gamepad and reads its standard face buttons, sticks, triggers, and D-pad. Xbox-style labels are used below; PlayStation and other controllers use the corresponding SDL-mapped positions.
 
-| Action | Keyboard | Standard gamepad | PEX Skate status |
+| Action | SkateGM keyboard | Xbox-style gamepad | PEX Skate status |
 | --- | --- | --- | --- |
 | Toggle Skate mode | G | — | Supported |
-| Right-foot push | W or Space | A | Supported |
+| Right-foot push | W or Space | A | Supported (Space also uses Minecraft's jump binding) |
 | Left-foot push | Left Shift | X | Supported |
 | Brake | S | B | Supported |
 | Steer | A / D | Left stick X | Supported |
@@ -94,18 +94,18 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | Flick-It tricks | Arrow keys | Right stick | Supported |
 | Grab with left / right hand | Q / E | Left / right trigger | Supported |
 | Get on/off board | F | Y | Supported |
-| Interact | C | Skate 3's in-game interact control | Not implemented in PEX Skate |
+| Interact | C | Skate 3's in-game interact control | Not implemented |
 | Gameplay gestures | I (up), K (down), U (left), O (right) | D-pad | Supported |
-| Menu / start / back | Z / Enter / Backspace | SkateGM menu controls | Not implemented in PEX Skate |
-| Respawn / exit free camera | R / L | LB + X respawns | Not implemented in PEX Skate |
-| Rocket board / use item | Ctrl / Alt | Right-stick click / left-stick click | Not implemented in PEX Skate |
-| Set/return to marker | — | LB + D-pad down / up (hold up to return) | Not implemented in PEX Skate |
-| Minigame host/join | — | LB + D-pad left | Not implemented in PEX Skate |
-| Spectate / teleport / accept invite | — | LB + D-pad right | Not implemented in PEX Skate |
-| Skate 3 music | Z + Ctrl/arrows | LB + right stick | Not implemented in PEX Skate |
-| Settings / map / park editor / replays | — | LB + A / Y / B / RB | Not implemented in PEX Skate |
+| Open menu / start / back | Z / Enter / Backspace (Backspace in menus) | Start / Back | Not implemented |
+| Respawn / exit free camera | R / L | LB + X respawns | Not implemented |
+| Rocket board / use item | Ctrl / Alt | Right-stick click / left-stick click | Not implemented |
+| Set/return to marker | — | LB + D-pad down / up (hold up to return) | Not implemented |
+| Minigame host/join | — | LB + D-pad left | Not implemented |
+| Spectate / teleport / accept invite | — | LB + D-pad right | Not implemented |
+| Skate 3 music | Z + Ctrl/arrows | LB + right stick | Not implemented |
+| Settings / map / park editor / replays | WASD to move in map/editor/replays | LB + A / Y / B / RB | Not implemented |
 
-SkateGM documents the broader original keyboard and controller layout; the table marks which actions this PEX port currently handles. The supported PEX Skate keys can be rebound under Controls → Key Binds → PEX Skate. While skating, Q/E are reserved for grabs and Minecraft's matching drop/inventory actions are suppressed. For a gamepad, SDL3 reads the first connected standard gamepad. The Minecraft port currently sends Skate mode toggle, pushes, brake, steering/pumping, Flick-It trick axes, grab triggers, and D-pad gesture inputs to the simulation. The remaining SkateGM actions are reference mappings only and are not implemented in PEX Skate yet.
+The table combines SkateGM's complete documented keyboard controls and its LB modifier/controller extras with the PEX port's current inputs. The actual Skate 3 controller layout is used for gameplay: A/X/B push or brake, the left stick steers/pumps, the right stick performs Flick-It tricks, triggers grab, Y gets on/off the board, and the D-pad sends gameplay gestures. The extra SkateGM controller combinations are shown for reference but are not implemented by PEX Skate. Supported keyboard actions can be rebound under Controls → Key Binds → PEX Skate. While skating, Q/E are reserved for grabs and Minecraft's matching drop/inventory actions are suppressed. SDL3 currently uses the first connected standard gamepad.
 
 ## Protocol
 
