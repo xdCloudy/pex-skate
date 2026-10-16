@@ -473,8 +473,8 @@ impl EventHandler<PlayerMoveEvent> for SkateMovement {
 }
 
 fn broadcast_pose(server: &Server, entity_id: u32, pose: &SkatePose, active: bool) {
-    let mut payload = Vec::with_capacity(400);
-    payload.push(4); // version
+    let mut payload = Vec::with_capacity(1100);
+    payload.push(5); // version
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in pose.root {
@@ -539,6 +539,13 @@ fn append_visual(
         }
     } else {
         payload.resize(payload.len() + 10 * 4, 0);
+    }
+    if let Some(bones) = visual.map(|visual| &visual.bones) {
+        for rotation in bones.rotations.iter().flatten() {
+            payload.extend_from_slice(&rotation.to_be_bytes());
+        }
+    } else {
+        payload.resize(payload.len() + 36 * 4 * 2, 0);
     }
 }
 
@@ -633,12 +640,13 @@ mod integration_tests {
     }
 
     #[test]
-    fn v4_visual_tail_has_fixed_skeleton_and_camera_layout() {
+    fn v5_visual_tail_has_fixed_skeleton_camera_and_rotation_layout() {
         let visual = engine::SkateVisualPose {
             bones: engine::SkateBones {
                 hips: [4.0, 5.0, 6.0],
                 present: 1 << 1,
                 offsets: [[0; 3]; 36],
+                rotations: [[0; 4]; 36],
             },
             camera: Some(engine::SkateCamera {
                 offset: [1.25, 2.5, -3.75],
@@ -650,10 +658,11 @@ mod integration_tests {
         let mut payload = Vec::new();
         append_visual(&mut payload, Some(&visual), [0.0; 3]);
 
-        assert_eq!(payload.len(), 12 + 8 + 36 * 3 * 2 + 10 * 4);
+        assert_eq!(payload.len(), 12 + 8 + 36 * 3 * 2 + 10 * 4 + 36 * 4 * 2);
         assert_eq!(&payload[0..4], &4.0_f32.to_be_bytes());
         assert_eq!(&payload[12..20], &(1_u64 << 1).to_be_bytes());
         assert_eq!(&payload[236..240], &1.25_f32.to_be_bytes());
         assert_eq!(&payload[272..276], &73.0_f32.to_be_bytes());
+        assert_eq!(&payload[276..278], &0_i16.to_be_bytes());
     }
 }

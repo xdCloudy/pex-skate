@@ -7,7 +7,7 @@ This bundle contains a server component and a client companion. Install both for
 1. Install the PEX/Pumpkin server version listed in the project README.
 2. Copy `pex-skate.wasm` into the server's configured plugin directory.
 3. Start the server once so PEX creates the plugin data directory.
-4. Download and extract the separate `PEX-Skate-ISO-Setup-Windows.zip` asset from the GitHub release. Run `Install-PEXSkateData.bat`, select your legally obtained Skate 3 Xbox 360 ISO, and select `<server>/plugins/data/pex-skate/`. The local converter validates the generated files and installs `private/` directly in that data folder, as expected by the engine. It does not upload or bundle game data. The setup ZIP includes the converter's corresponding source and license notices.
+4. Download and extract the separate `PEX-Skate-ISO-Setup-Windows.zip` asset from the GitHub release. Run `Install-PEXSkateData.bat` and select your legally obtained Skate 3 Xbox 360 ISO. Select `<server>/plugins/data/pex-skate/` to install server data, or cancel that picker for client-only model setup. In the optional next picker, select the local Minecraft instance's `config/` folder to install the skater model at `config/pex-skate/private/skater.glb`; each client needs its own local model. The converter does not upload or bundle game data. The setup ZIP includes the converter's corresponding source and license notices.
 5. Restart the server and check its log for plugin load errors.
 
 ## Client

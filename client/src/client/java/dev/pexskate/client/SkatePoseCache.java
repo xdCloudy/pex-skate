@@ -24,7 +24,7 @@ public final class SkatePoseCache {
         };
         Frame next = new Frame(now, packet.x(), packet.y(), packet.z(),
                 packet.hipsX(), packet.hipsY(), packet.hipsZ(),
-                packet.boneMask(), packet.boneOffsets(), boardYaw(packet), camera);
+                packet.boneMask(), packet.boneOffsets(), packet.boneRotations(), boardYaw(packet), camera);
         if (track == null) TRACKS.put(packet.entityId(), new Track(next, next));
         else {
             track.previous = track.current;
@@ -68,7 +68,7 @@ public final class SkatePoseCache {
 
     private record Frame(long time, float rootX, float rootY, float rootZ,
                          float hipsX, float hipsY, float hipsZ,
-                         long mask, short[] offsets, float yaw, float[] camera) {}
+                         long mask, short[] offsets, short[] rotations, float yaw, float[] camera) {}
 
     public static final class Pose {
         private final Frame a;
@@ -90,6 +90,28 @@ public final class SkatePoseCache {
                     lerp(first[1], second[1], t),
                     lerp(first[2], second[2], t)
             };
+        }
+
+        /** World-space x/y/z/w rotation for a Skate rig joint. */
+        public float[] rotation(int index) {
+            if (!has(index)) return null;
+            float[] first = rotation(a, index);
+            float[] second = rotation(b, index);
+            float dot = first[0] * second[0] + first[1] * second[1]
+                    + first[2] * second[2] + first[3] * second[3];
+            if (dot < 0.0f) {
+                for (int i = 0; i < 4; i++) second[i] = -second[i];
+            }
+            float[] result = new float[4];
+            float magnitude = 0.0f;
+            for (int i = 0; i < 4; i++) {
+                result[i] = first[i] + (second[i] - first[i]) * t;
+                magnitude += result[i] * result[i];
+            }
+            magnitude = (float) Math.sqrt(magnitude);
+            if (magnitude < 1.0e-5f) return new float[] {0.0f, 0.0f, 0.0f, 1.0f};
+            for (int i = 0; i < 4; i++) result[i] /= magnitude;
+            return result;
         }
 
         public float yaw() {
@@ -140,6 +162,20 @@ public final class SkatePoseCache {
                     frame.hipsY + frame.offsets[i + 1] / 4096.0f,
                     frame.hipsZ + frame.offsets[i + 2] / 4096.0f
             };
+        }
+
+        private static float[] rotation(Frame frame, int index) {
+            int i = index * 4;
+            float[] result = new float[4];
+            float magnitude = 0.0f;
+            for (int axis = 0; axis < 4; axis++) {
+                result[axis] = frame.rotations[i + axis] / (float) Short.MAX_VALUE;
+                magnitude += result[axis] * result[axis];
+            }
+            magnitude = (float) Math.sqrt(magnitude);
+            if (magnitude < 1.0e-5f) return new float[] {0.0f, 0.0f, 0.0f, 1.0f};
+            for (int axis = 0; axis < 4; axis++) result[axis] /= magnitude;
+            return result;
         }
 
         private static float lerp(float a, float b, float t) { return a + (b - a) * t; }

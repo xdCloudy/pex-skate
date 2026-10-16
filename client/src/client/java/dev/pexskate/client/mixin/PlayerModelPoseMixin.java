@@ -17,6 +17,7 @@ public abstract class PlayerModelPoseMixin {
         if (pose == null) return;
 
         PlayerModel model = (PlayerModel) (Object) this;
+
         float[] hips = pose.point(1);
         float[] spine = pose.point(5);
         float[] leftHip = pose.point(21);

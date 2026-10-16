@@ -20,13 +20,42 @@ if ($isoPicker.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { exit 
 $isoPath = $isoPicker.FileName
 
 $folderPicker = New-Object System.Windows.Forms.FolderBrowserDialog
-$folderPicker.Description = "Select the PEX Skate plugin data folder (normally plugins/data/pex-skate)"
+$folderPicker.Description = "Select the server PEX Skate data folder, or cancel for client-only model setup."
 $folderPicker.UseDescriptionForTitle = $true
-if ($folderPicker.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { exit 0 }
-$dataPath = [System.IO.Path]::GetFullPath($folderPicker.SelectedPath)
-$privatePath = Join-Path $dataPath "private"
+$dataPath = if ($folderPicker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    [System.IO.Path]::GetFullPath($folderPicker.SelectedPath)
+} else {
+    $null
+}
+$privatePath = if ($dataPath) { Join-Path $dataPath "private" } else { $null }
 
-if (Test-Path -LiteralPath $privatePath) {
+$clientConfigPath = $null
+$clientFolderPicker = New-Object System.Windows.Forms.FolderBrowserDialog
+$clientFolderPicker.Description = "Optional: select this Minecraft instance's config folder to install the local skater model. Cancel to skip."
+$clientFolderPicker.UseDescriptionForTitle = $true
+$defaultClientConfig = Join-Path $env:APPDATA ".minecraft\config"
+if (Test-Path -LiteralPath $defaultClientConfig -PathType Container) {
+    $clientFolderPicker.SelectedPath = $defaultClientConfig
+}
+if ($clientFolderPicker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    $clientConfigPath = [System.IO.Path]::GetFullPath($clientFolderPicker.SelectedPath)
+}
+if (-not $dataPath -and -not $clientConfigPath) {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Select a server data folder or a local Minecraft config folder.",
+        "PEX Skate data setup",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    ) | Out-Null
+    exit 0
+}
+$clientModelPath = if ($clientConfigPath) {
+    Join-Path $clientConfigPath "pex-skate\private\skater.glb"
+} else {
+    $null
+}
+
+if ($privatePath -and (Test-Path -LiteralPath $privatePath)) {
     $answer = [System.Windows.Forms.MessageBox]::Show(
         "The selected PEX Skate data folder already has converted assets. Replace those assets with a fresh conversion? Other files in the folder will be kept.",
         "Replace converted assets?",
@@ -36,9 +65,12 @@ if (Test-Path -LiteralPath $privatePath) {
     if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { exit 0 }
 }
 
-New-Item -ItemType Directory -Force -Path $dataPath | Out-Null
 $stagePath = Join-Path ([System.IO.Path]::GetTempPath()) ("pex-skate-import-" + [guid]::NewGuid().ToString("N"))
-$backupPath = Join-Path $dataPath ("private.previous-" + [guid]::NewGuid().ToString("N"))
+$backupPath = $null
+if ($dataPath) {
+    New-Item -ItemType Directory -Force -Path $dataPath | Out-Null
+    $backupPath = Join-Path $dataPath ("private.previous-" + [guid]::NewGuid().ToString("N"))
+}
 try {
     Write-Host "Converting the selected ISO locally. This can take several minutes."
     & $converter --xex $isoPath --out $stagePath
@@ -58,27 +90,67 @@ try {
         }
     }
 
-    if (Test-Path -LiteralPath $privatePath) {
-        Move-Item -LiteralPath $privatePath -Destination $backupPath
-    }
-    try {
-        Move-Item -LiteralPath (Join-Path $stagePath "assets\private") -Destination $privatePath
-    } catch {
-        if (Test-Path -LiteralPath $backupPath) {
-            Move-Item -LiteralPath $backupPath -Destination $privatePath
+    $serverDataMessage = "Server data not installed (client-only setup)."
+    $modelSourcePath = Join-Path $stagePath "assets\private\skater.glb"
+    if ($dataPath) {
+        if (Test-Path -LiteralPath $privatePath) {
+            Move-Item -LiteralPath $privatePath -Destination $backupPath
         }
-        throw
+        try {
+            Move-Item -LiteralPath (Join-Path $stagePath "assets\private") -Destination $privatePath
+        } catch {
+            if (Test-Path -LiteralPath $backupPath) {
+                Move-Item -LiteralPath $backupPath -Destination $privatePath
+            }
+            throw
+        }
+        Copy-Item -LiteralPath (Join-Path $stagePath "conversion.log") -Destination (Join-Path $dataPath "conversion.log") -Force
+        if (Test-Path -LiteralPath $backupPath) {
+            $resolvedBackup = (Resolve-Path -LiteralPath $backupPath).Path
+            if ([System.IO.Path]::GetDirectoryName($resolvedBackup) -eq $dataPath) {
+                Remove-Item -LiteralPath $resolvedBackup -Recurse -Force
+            }
+        }
+        $serverDataMessage = "Server data installed: $dataPath"
+        $modelSourcePath = Join-Path $privatePath "skater.glb"
     }
-    Copy-Item -LiteralPath (Join-Path $stagePath "conversion.log") -Destination (Join-Path $dataPath "conversion.log") -Force
-    if (Test-Path -LiteralPath $backupPath) {
-        $resolvedBackup = (Resolve-Path -LiteralPath $backupPath).Path
-        if ([System.IO.Path]::GetDirectoryName($resolvedBackup) -eq $dataPath) {
-            Remove-Item -LiteralPath $resolvedBackup -Recurse -Force
+
+    $clientModelMessage = "Client model not installed. To use the Skate 3 character mesh, run this setup on each client and choose its Minecraft config folder."
+    if ($clientModelPath) {
+        $replaceClientModel = $true
+        if (Test-Path -LiteralPath $clientModelPath -PathType Leaf) {
+            $answer = [System.Windows.Forms.MessageBox]::Show(
+                "Replace the existing local PEX Skate model?",
+                "Replace client model?",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            $replaceClientModel = $answer -eq [System.Windows.Forms.DialogResult]::Yes
+        }
+        if ($replaceClientModel) {
+            try {
+                $clientModelDirectory = Split-Path -Parent $clientModelPath
+                New-Item -ItemType Directory -Force -Path $clientModelDirectory | Out-Null
+                $temporaryModelPath = $null
+                $temporaryModelPath = Join-Path $clientModelDirectory (".skater-" + [guid]::NewGuid().ToString("N") + ".tmp")
+                Copy-Item -LiteralPath $modelSourcePath -Destination $temporaryModelPath
+                Move-Item -LiteralPath $temporaryModelPath -Destination $clientModelPath -Force
+                $clientModelMessage = "Client model installed: $clientModelPath"
+            } catch {
+                $clientModelMessage = "Converted data is ready, but the client model copy failed: $($_.Exception.Message)"
+            } finally {
+                if ($temporaryModelPath -and (Test-Path -LiteralPath $temporaryModelPath)) {
+                    Remove-Item -LiteralPath $temporaryModelPath -Force
+                }
+            }
+        } else {
+            $clientModelMessage = "Existing client model kept."
         }
     }
 
+    $restartMessage = if ($dataPath) { "Restart the PEX server before enabling Skate mode." } else { "Restart Minecraft before using the new local model." }
     [System.Windows.Forms.MessageBox]::Show(
-        "Skate 3 data is ready in:`r`n$dataPath`r`n`r`nRestart the PEX server before enabling Skate mode.",
+        "$serverDataMessage`r`n$clientModelMessage`r`n`r`n$restartMessage",
         "PEX Skate data setup complete",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Information

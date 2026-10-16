@@ -57,6 +57,8 @@ pub struct SkateBones {
     pub present: u64,
     /// Quantized x/y/z offsets from hips, in 1/4096 Minecraft-block units.
     pub offsets: [[i16; 3]; 36],
+    /// Quantized world-space bone rotations as x/y/z/w unit quaternions.
+    pub rotations: [[i16; 4]; 36],
 }
 
 #[derive(Clone, Debug)]
@@ -162,6 +164,7 @@ impl SkateSession {
         };
         let mut present = 0_u64;
         let mut offsets = [[0_i16; 3]; 36];
+        let mut rotations = [[0_i16; 4]; 36];
         for (slot, name) in SKATER_BONE_NAMES.iter().enumerate() {
             let Some(index) = self.bone_names.iter().position(|bone| bone == name) else {
                 continue;
@@ -169,12 +172,12 @@ impl SkateSession {
             let Some(matrix) = pose.bones.get(index) else {
                 continue;
             };
-            let local = matrix.to_cols_array();
-            let world = if root_relative {
-                multiply(&root_matrix, &local)
+            let world_matrix = if root_relative {
+                pose.root * *matrix
             } else {
-                local
+                *matrix
             };
+            let world = world_matrix.to_cols_array();
             let point = translation(&world);
             if !point.into_iter().all(f32::is_finite) {
                 continue;
@@ -185,6 +188,8 @@ impl SkateSession {
                     .round()
                     .clamp(i16::MIN as f32, i16::MAX as f32) as i16
             });
+            let (_, rotation, _) = world_matrix.to_scale_rotation_translation();
+            rotations[slot] = quantize_rotation(rotation.to_array());
         }
         let camera = pose.camera.as_ref().and_then(|(position, basis, fov)| {
             let camera = SkateCamera {
@@ -212,6 +217,7 @@ impl SkateSession {
                 hips,
                 present,
                 offsets,
+                rotations,
             },
             camera,
         })
@@ -235,6 +241,21 @@ impl SkateSession {
             visual: None,
         }
     }
+}
+
+fn quantize_rotation(mut rotation: [f32; 4]) -> [i16; 4] {
+    let magnitude = rotation
+        .iter()
+        .map(|value| value * value)
+        .sum::<f32>()
+        .sqrt();
+    if !magnitude.is_finite() || magnitude < 1.0e-5 {
+        return [0, 0, 0, i16::MAX];
+    }
+    for value in &mut rotation {
+        *value /= magnitude;
+    }
+    rotation.map(|value| (value.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16)
 }
 
 fn translation(matrix: &[f32; 16]) -> [f32; 3] {
@@ -275,7 +296,7 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
 
 #[cfg(test)]
 mod tests {
-    use super::to_engine_controls;
+    use super::{quantize_rotation, to_engine_controls};
     use crate::physics::Controls;
 
     #[test]
@@ -315,5 +336,13 @@ mod tests {
             ..Controls::default()
         });
         assert_eq!(input.buttons & (1 << 15), 1 << 15);
+    }
+
+    #[test]
+    fn bone_rotation_quaternions_are_unit_quantized_and_invalid_values_fallback() {
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        let rotation = quantize_rotation([0.0, 0.0, half, half]);
+        assert_eq!(rotation, [0, 0, 23170, 23170]);
+        assert_eq!(quantize_rotation([f32::NAN; 4]), [0, 0, 0, i16::MAX]);
     }
 }

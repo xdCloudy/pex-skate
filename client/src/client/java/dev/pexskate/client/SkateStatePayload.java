@@ -19,6 +19,7 @@ public record SkateStatePayload(
         float hipsX, float hipsY, float hipsZ,
         long boneMask,
         short[] boneOffsets,
+        short[] boneRotations,
         float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
         float cameraForwardX, float cameraForwardY, float cameraForwardZ,
         float cameraUpX, float cameraUpY, float cameraUpZ,
@@ -53,9 +54,18 @@ public record SkateStatePayload(
                         payload.cameraForwardX(), payload.cameraForwardY(), payload.cameraForwardZ(),
                         payload.cameraUpX(), payload.cameraUpY(), payload.cameraUpZ(), payload.cameraFov()
                 }) buffer.writeFloat(value);
+                if (payload.version() >= 5) {
+                    if (payload.boneRotations().length != 36 * 4) {
+                        throw new IllegalArgumentException("PEX Skate state must contain 36 joint rotations");
+                    }
+                    for (short rotation : payload.boneRotations()) buffer.writeShort(rotation);
+                }
             },
             buffer -> {
                 byte version = buffer.readByte();
+                if (version != 4 && version != 5) {
+                    throw new IllegalArgumentException("Unsupported PEX Skate state version " + version);
+                }
                 boolean active = buffer.readBoolean();
                 int entityId = buffer.readInt();
                 float[] values = new float[18];
@@ -73,17 +83,27 @@ public record SkateStatePayload(
                 for (int i = 0; i < offsets.length; i++) offsets[i] = buffer.readShort();
                 float[] camera = new float[10];
                 for (int i = 0; i < camera.length; i++) camera[i] = buffer.readFloat();
+                short[] rotations = identityRotations();
+                if (version >= 5) {
+                    for (int i = 0; i < rotations.length; i++) rotations[i] = buffer.readShort();
+                }
                 return new SkateStatePayload(version, active, entityId,
                         values[0], values[1], values[2], values[3], values[4], values[5],
                         values[6], values[7], values[8], values[9],
                         values[10], values[11], values[12], values[13], values[14],
                         values[15], values[16], values[17],
                         flags, new String(trick, java.nio.charset.StandardCharsets.UTF_8),
-                        hipsX, hipsY, hipsZ, boneMask, offsets,
+                        hipsX, hipsY, hipsZ, boneMask, offsets, rotations,
                         camera[0], camera[1], camera[2], camera[3], camera[4], camera[5],
                         camera[6], camera[7], camera[8], camera[9]);
             }
     );
+
+    private static short[] identityRotations() {
+        short[] rotations = new short[36 * 4];
+        for (int i = 0; i < 36; i++) rotations[i * 4 + 3] = Short.MAX_VALUE;
+        return rotations;
+    }
 
     @Override
     public Type<? extends CustomPacketPayload> type() {

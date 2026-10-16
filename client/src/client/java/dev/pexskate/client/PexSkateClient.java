@@ -12,13 +12,17 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.client.rendering.v1.LivingEntityRenderLayerRegistrationCallback;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.model.player.PlayerModel;
+import net.minecraft.client.renderer.entity.state.AvatarRenderState;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.entity.Display.ItemDisplay;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.resources.Identifier;
@@ -69,13 +73,22 @@ public final class PexSkateClient implements ClientModInitializer {
         PayloadTypeRegistry.serverboundPlay().register(ControlPayload.TYPE, ControlPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(SkateStatePayload.TYPE, SkateStatePayload.CODEC);
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
-            if (payload.version() == 4) {
+            if (payload.version() == 4 || payload.version() == 5) {
                 context.client().execute(() -> {
                     SkatePoseCache.accept(payload);
                     updateBoard(context.client(), payload);
                 });
             }
         });
+        LivingEntityRenderLayerRegistrationCallback.EVENT.register((entityType, renderer, helper, context) -> {
+            if (entityType == EntityTypes.PLAYER) {
+                @SuppressWarnings("unchecked")
+                RenderLayerParent<AvatarRenderState, PlayerModel> parent =
+                        (RenderLayerParent<AvatarRenderState, PlayerModel>) renderer;
+                helper.register(new SkateSkaterRenderLayer(parent));
+            }
+        });
+        ClientLifecycleEvents.CLIENT_STARTED.register(client -> SkateSkaterModel.load());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             clearBoards();
             if (skating && previousCamera != null) {
@@ -86,6 +99,7 @@ public final class PexSkateClient implements ClientModInitializer {
             previousCamera = null;
         });
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+            SkateSkaterModel.close();
             if (gamepadHandle != 0L) {
                 SDLGamepad.SDL_CloseGamepad(gamepadHandle);
                 gamepadHandle = 0L;
