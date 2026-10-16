@@ -75,6 +75,7 @@ public final class PexSkateClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         gamepadSubsystemReady = SDLInit.SDL_InitSubSystem(SDLInit.SDL_INIT_GAMEPAD);
+        PayloadTypeRegistry.serverboundPlay().register(ClientHelloPayload.TYPE, ClientHelloPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(ControlPayload.TYPE, ControlPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(SkateStatePayload.TYPE, SkateStatePayload.CODEC);
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
@@ -94,6 +95,8 @@ public final class PexSkateClient implements ClientModInitializer {
             }
         });
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> SkateSkaterModel.load());
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
+                ClientPlayNetworking.send(new ClientHelloPayload((byte) 1)));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             clearBoards();
             if (skating && previousCamera != null) {

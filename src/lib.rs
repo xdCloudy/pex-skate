@@ -30,13 +30,19 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
+const CLIENT_PROTOCOL_VERSION: u8 = 1;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
 }
 
+fn supports_client_protocol(data: &[u8]) -> bool {
+    data == [CLIENT_PROTOCOL_VERSION]
+}
+
 #[derive(Default)]
 struct ServerState {
+    compatible_clients: HashSet<String>,
     enabled: HashSet<String>,
     controls: HashMap<String, Controls>,
     control_updated_at: HashMap<String, Instant>,
@@ -141,6 +147,12 @@ impl CommandHandler for ToggleSkate {
         _args: pumpkin_plugin_api::command::ConsumedArgs,
     ) -> pumpkin_plugin_api::Result<i32, pumpkin_plugin_api::command::CommandError> {
         let name = sender.get_name();
+        let Some(player) = server.get_player_by_name(&name) else {
+            sender.send_message(TextComponent::text(
+                "Skate mode can only be enabled by a player.",
+            ));
+            return Ok(0);
+        };
         let should_disable = {
             let Ok(mut state) = server_state().lock() else {
                 return Err(pumpkin_plugin_api::command::CommandError::CommandFailed(
@@ -159,6 +171,11 @@ impl CommandHandler for ToggleSkate {
                 state.collision_center.remove(&name);
                 state.collision_scans.remove(&name);
                 true
+            } else if !state.compatible_clients.contains(&name) {
+                sender.send_message(TextComponent::text(
+                    "Install the PEX Skate Fabric client and reconnect before enabling Skate mode.",
+                ));
+                return Ok(0);
             } else if !state.pending_loads.insert(name.clone()) {
                 sender.send_message(TextComponent::text(
                     "Skate Engine is already loading for you.",
@@ -170,25 +187,16 @@ impl CommandHandler for ToggleSkate {
         };
 
         if should_disable {
-            if let Some(player) = server.get_player_by_name(&name) {
-                broadcast_state(
-                    &server,
-                    player.as_entity().get_id(),
-                    player.get_position(),
-                    player.get_yaw(),
-                    0.0,
-                    false,
-                );
-            }
+            broadcast_state(
+                &server,
+                player.as_entity().get_id(),
+                player.get_position(),
+                player.get_yaw(),
+                0.0,
+                false,
+            );
             sender.send_message(TextComponent::text("PEX Skate mode disabled."));
         } else {
-            let Some(player) = server.get_player_by_name(&name) else {
-                clear_pending_load(&name);
-                sender.send_message(TextComponent::text(
-                    "Skate mode can only be enabled by a player.",
-                ));
-                return Ok(0);
-            };
             if DATA_ROOT.get().is_none() {
                 clear_pending_load(&name);
                 sender.send_message(TextComponent::text(
@@ -235,6 +243,14 @@ impl EventHandler<PlayerCustomPayloadEvent> for SkateInput {
         _server: Server,
         event: pumpkin_plugin_api::events::EventData<PlayerCustomPayloadEvent>,
     ) -> pumpkin_plugin_api::events::EventData<PlayerCustomPayloadEvent> {
+        if event.channel == "pexskate:hello" {
+            if supports_client_protocol(&event.data)
+                && let Ok(mut state) = server_state().lock()
+            {
+                state.compatible_clients.insert(event.player.get_name());
+            }
+            return event;
+        }
         if event.channel != "pexskate:control" {
             return event;
         }
@@ -270,6 +286,7 @@ impl EventHandler<pumpkin_plugin_api::events::player::PlayerLeaveEvent> for Skat
         let position = event.player.get_position();
         let yaw = event.player.get_yaw();
         if let Ok(mut state) = server_state().lock() {
+            state.compatible_clients.remove(&name);
             state.enabled.remove(&name);
             state.controls.remove(&name);
             state.control_updated_at.remove(&name);
@@ -858,10 +875,10 @@ pumpkin_plugin_api::register_plugin!(PexSkate);
 #[cfg(test)]
 mod integration_tests {
     use super::{
-        COLLISION_BLOCKS_GLOBAL_PER_TICK, COLLISION_BLOCKS_PER_TICK,
+        CLIENT_PROTOCOL_VERSION, COLLISION_BLOCKS_GLOBAL_PER_TICK, COLLISION_BLOCKS_PER_TICK,
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, ServerState, append_visual,
         collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
-        physics::Controls, take_collision_budget,
+        physics::Controls, supports_client_protocol, take_collision_budget,
     };
     use std::time::{Duration, Instant};
 
@@ -961,6 +978,14 @@ mod integration_tests {
         );
         assert_eq!(take_collision_budget(&mut remaining), 0);
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn handshake_requires_the_supported_client_protocol_version() {
+        assert!(supports_client_protocol(&[CLIENT_PROTOCOL_VERSION]));
+        assert!(!supports_client_protocol(&[2]));
+        assert!(!supports_client_protocol(&[CLIENT_PROTOCOL_VERSION, 0]));
+        assert!(!supports_client_protocol(&[]));
     }
 
     #[test]
