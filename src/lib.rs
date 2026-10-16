@@ -29,6 +29,7 @@ const STATE_BROADCAST_INTERVAL: Duration = Duration::from_millis(50);
 const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
+const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -47,6 +48,7 @@ struct ServerState {
     last_broadcast_at: HashMap<String, Instant>,
     collision_center: HashMap<String, (f32, f32, f32)>,
     collision_scans: HashMap<String, CollisionScan>,
+    collision_scan_cursor: Option<String>,
 }
 
 struct PendingSkateLoad {
@@ -318,31 +320,61 @@ impl EventHandler<ServerTickEndEvent> for SkateTick {
         server: Server,
         event: pumpkin_plugin_api::events::EventData<ServerTickEndEvent>,
     ) -> pumpkin_plugin_api::events::EventData<ServerTickEndEvent> {
-        let pending = server_state()
-            .lock()
-            .map(|state| {
-                state
-                    .pending_initial_scans
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        for name in pending {
-            tick_pending_skate_load(&server, &name);
-        }
         let names = server_state()
             .lock()
-            .map(|state| state.enabled.iter().cloned().collect::<Vec<_>>())
+            .map(|state| collision_work_order(&state))
             .unwrap_or_default();
+        let mut collision_budget = COLLISION_BLOCKS_GLOBAL_PER_TICK;
         for name in names {
-            tick_skater(&server, &name);
+            let (is_pending, is_enabled) = server_state()
+                .lock()
+                .map(|state| {
+                    (
+                        state.pending_initial_scans.contains_key(&name),
+                        state.enabled.contains(&name),
+                    )
+                })
+                .unwrap_or_default();
+            let remaining_before = collision_budget;
+            if is_pending {
+                tick_pending_skate_load(&server, &name, &mut collision_budget);
+            } else if is_enabled {
+                tick_skater(&server, &name, &mut collision_budget);
+            }
+            if collision_budget < remaining_before
+                && let Ok(mut state) = server_state().lock()
+            {
+                state.collision_scan_cursor = Some(name);
+            }
         }
         event
     }
 }
 
-fn tick_pending_skate_load(server: &Server, name: &str) {
+fn collision_work_order(state: &ServerState) -> Vec<String> {
+    let mut names = state
+        .pending_initial_scans
+        .keys()
+        .chain(state.enabled.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    if let Some(cursor) = state.collision_scan_cursor.as_deref()
+        && let Some(next) = names.iter().position(|name| name.as_str() > cursor)
+    {
+        names.rotate_left(next);
+    }
+    names
+}
+
+fn take_collision_budget(global_budget: &mut usize) -> usize {
+    let budget = (*global_budget).min(COLLISION_BLOCKS_PER_TICK);
+    *global_budget -= budget;
+    budget
+}
+
+fn tick_pending_skate_load(server: &Server, name: &str, global_budget: &mut usize) {
     let Some(player) = server.get_player_by_name(name) else {
         clear_pending_load(name);
         return;
@@ -364,7 +396,16 @@ fn tick_pending_skate_load(server: &Server, name: &str) {
         pending.heading = player.get_yaw().to_radians();
     }
     let world = player.as_entity().get_world();
-    let complete = match pending.scan.advance(&world, COLLISION_BLOCKS_PER_TICK) {
+    let block_budget = take_collision_budget(global_budget);
+    if block_budget == 0 {
+        if let Ok(mut state) = server_state().lock()
+            && state.pending_loads.contains(name)
+        {
+            state.pending_initial_scans.insert(name.to_owned(), pending);
+        }
+        return;
+    }
+    let complete = match pending.scan.advance(&world, block_budget) {
         Ok(complete) => complete,
         Err(error) => {
             clear_pending_load(name);
@@ -460,7 +501,7 @@ fn tick_pending_skate_load(server: &Server, name: &str) {
     player.send_system_message(TextComponent::text("Skate 3 Engine mode enabled."), true);
 }
 
-fn tick_skater(server: &Server, name: &str) {
+fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize) {
     let Some(player) = server.get_player_by_name(name) else {
         return;
     };
@@ -557,7 +598,7 @@ fn tick_skater(server: &Server, name: &str) {
         name,
         should_refresh_collision,
         root,
-        COLLISION_BLOCKS_PER_TICK,
+        global_collision_budget,
     ) {
         stop_skate_for_player(server, &player, name, error);
         return;
@@ -585,7 +626,7 @@ fn advance_collision_scan(
     name: &str,
     start_if_needed: bool,
     requested_center: (f64, f64, f64),
-    block_budget: usize,
+    global_budget: &mut usize,
 ) -> Result<(), String> {
     let mut scan = {
         let mut state = server_state()
@@ -602,6 +643,15 @@ fn advance_collision_scan(
     let Some(mut scan) = scan.take() else {
         return Ok(());
     };
+    let block_budget = take_collision_budget(global_budget);
+    if block_budget == 0 {
+        server_state()
+            .lock()
+            .map_err(|_| "Skate mode state is unavailable".to_owned())?
+            .collision_scans
+            .insert(name.to_owned(), scan);
+        return Ok(());
+    }
     if !scan.advance(world, block_budget)? {
         server_state()
             .lock()
@@ -808,8 +858,10 @@ pumpkin_plugin_api::register_plugin!(PexSkate);
 #[cfg(test)]
 mod integration_tests {
     use super::{
+        COLLISION_BLOCKS_GLOBAL_PER_TICK, COLLISION_BLOCKS_PER_TICK,
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, ServerState, append_visual,
-        collision_refresh_needed, engine, initial_scan_recenter_needed, physics::Controls,
+        collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
+        physics::Controls, take_collision_budget,
     };
     use std::time::{Duration, Instant};
 
@@ -876,6 +928,39 @@ mod integration_tests {
         assert!(!initial_scan_recenter_needed(center, (3.99, 64.0, 0.0)));
         assert!(initial_scan_recenter_needed(center, (4.0, 64.0, 0.0)));
         assert!(initial_scan_recenter_needed(center, (0.0, 65.5, 0.0)));
+    }
+
+    #[test]
+    fn collision_scan_order_rotates_after_last_player_that_used_budget() {
+        let mut state = ServerState::default();
+        state
+            .enabled
+            .extend(["alpha".into(), "bravo".into(), "charlie".into()]);
+        state.collision_scan_cursor = Some("alpha".into());
+        assert_eq!(
+            collision_work_order(&state),
+            vec!["bravo", "charlie", "alpha"]
+        );
+        state.collision_scan_cursor = Some("charlie".into());
+        assert_eq!(
+            collision_work_order(&state),
+            vec!["alpha", "bravo", "charlie"]
+        );
+    }
+
+    #[test]
+    fn per_player_collision_work_never_exceeds_the_global_tick_budget() {
+        let mut remaining = COLLISION_BLOCKS_GLOBAL_PER_TICK;
+        assert_eq!(
+            take_collision_budget(&mut remaining),
+            COLLISION_BLOCKS_PER_TICK
+        );
+        assert_eq!(
+            take_collision_budget(&mut remaining),
+            COLLISION_BLOCKS_PER_TICK
+        );
+        assert_eq!(take_collision_budget(&mut remaining), 0);
+        assert_eq!(remaining, 0);
     }
 
     #[test]
