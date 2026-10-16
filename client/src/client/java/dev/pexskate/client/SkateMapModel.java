@@ -400,15 +400,15 @@ public final class SkateMapModel {
                 uploadTexture(client, task, task.nextTexture++);
                 return;
             }
+            PendingSky pendingSky = task.parsed.sky;
+            Sky sky = pendingSky == null ? null : new Sky(pendingSky, task.textureIds[pendingSky.diffuseTextureIndex]);
             List<Primitive> primitives = new ArrayList<>(task.parsed.primitives.size());
             for (PendingPrimitive primitive : task.parsed.primitives) {
                 primitives.add(new Primitive(primitive.positions, primitive.normals, primitive.uv,
                         primitive.vertexIndirectLight, primitive.indices, primitive.bounds,
                         task.textureIds[primitive.textureIndex], primitive.color, primitive.alphaMode,
-                        task.parsed.lights));
+                        task.parsed.lights, sky));
             }
-            PendingSky pendingSky = task.parsed.sky;
-            Sky sky = pendingSky == null ? null : new Sky(pendingSky, task.textureIds[pendingSky.diffuseTextureIndex]);
             model = new Model(task.parsed.filename, task.parsed.mapSha256, task.parsed.propsSha256,
                     List.copyOf(primitives), sky);
             uploadTask = null;
@@ -773,7 +773,9 @@ public final class SkateMapModel {
         float[] sunDirection = {reader.f32(), reader.f32(), reader.f32()};
         float sunScale = reader.f32(), exposure = reader.f32();
         if (fogNear < 0 || fogFar <= fogNear || fogPower <= 0 || fogMaximum < 0 || fogMaximum > 1
-                || sunScale <= 0 || exposure < 0) {
+                || sunScale <= 0 || exposure < 0
+                || sunDirection[0] * sunDirection[0] + sunDirection[1] * sunDirection[1]
+                    + sunDirection[2] * sunDirection[2] < 1.0e-8f) {
             throw new IOException("invalid SKATE authored sky environment values");
         }
         byte[] diffuse = reader.stored(Math.multiplyExact(Math.multiplyExact(width, height), 4));
@@ -952,9 +954,7 @@ public final class SkateMapModel {
         private final float[] positions, uv;
         private final int[] indices;
         private final Identifier diffuseTexture;
-        @SuppressWarnings("unused")
         private final float fogNear, fogFar, fogPower, fogMaximum, sunScale, exposure;
-        @SuppressWarnings("unused")
         private final float[] fogColor, sunDirection;
 
         private Sky(PendingSky data, Identifier diffuseTexture) {
@@ -967,7 +967,14 @@ public final class SkateMapModel {
             fogPower = data.fogPower;
             fogMaximum = data.fogMaximum;
             fogColor = data.fogColor;
-            sunDirection = data.sunDirection;
+            double sunLength = Math.sqrt(data.sunDirection[0] * data.sunDirection[0]
+                    + data.sunDirection[1] * data.sunDirection[1]
+                    + data.sunDirection[2] * data.sunDirection[2]);
+            sunDirection = new float[] {
+                    (float) (data.sunDirection[0] / sunLength),
+                    (float) (data.sunDirection[1] / sunLength),
+                    (float) (data.sunDirection[2] / sunLength)
+            };
             sunScale = data.sunScale;
             exposure = data.exposure;
         }
@@ -1026,10 +1033,12 @@ public final class SkateMapModel {
         private final float[] bounds;
         private final int alphaMode;
         private final List<AuthoredLight> lights;
+        private final float[] sunDirection;
+        private final float sunIntensity;
 
         private Primitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight, int[] indices,
                           float[] bounds, Identifier texture, float[] color, int alphaMode,
-                          List<AuthoredLight> authoredLights) {
+                          List<AuthoredLight> authoredLights, Sky sky) {
             this.positions = positions;
             this.normals = normals;
             this.uv = uv;
@@ -1042,6 +1051,8 @@ public final class SkateMapModel {
             this.lights = authoredLights.stream()
                     .filter(value -> distanceSquared(value.position) <= value.range * value.range)
                     .toList();
+            this.sunDirection = sky == null ? null : sky.sunDirection;
+            this.sunIntensity = sky == null ? 0.0f : Math.min(1.0f, sky.sunScale * sky.exposure);
         }
 
         private double distanceSquared(Vec3 point) {
@@ -1079,6 +1090,13 @@ public final class SkateMapModel {
                 float red = color[0] * vertexIndirectLight[point];
                 float green = color[1] * vertexIndirectLight[point + 1];
                 float blue = color[2] * vertexIndirectLight[point + 2];
+                if (sunDirection != null) {
+                    float sun = Math.max(0.0f, normal.x * sunDirection[0]
+                            + normal.y * sunDirection[1] + normal.z * sunDirection[2]) * sunIntensity;
+                    red += sun;
+                    green += sun;
+                    blue += sun;
+                }
                 if (!lights.isEmpty()) {
                     float x = positions[point], y = positions[point + 1], z = positions[point + 2];
                     for (AuthoredLight authored : lights) {

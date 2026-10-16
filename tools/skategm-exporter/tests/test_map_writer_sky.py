@@ -62,6 +62,8 @@ class RetailSkyExtensionTests(unittest.TestCase):
         values = struct.unpack('<13f', stream.read(52))
         for actual, expected in zip(values[:4], (30.0, 250.0, 1.5, 0.8), strict=True):
             self.assertAlmostEqual(actual, expected)
+        for actual, expected in zip(values[8:], (0.0, 1.0, 0.0, 0.035, 1.0), strict=True):
+            self.assertAlmostEqual(actual, expected)
         self.assertEqual(read_stored(stream, 16), bytes(range(8, 16)) + bytes(range(8)))
         self.assertEqual(read_stored(stream, 8), bytes(range(8)))
         vertices = read_stored(stream, 3 * 5 * 4)
@@ -76,6 +78,15 @@ class RetailSkyExtensionTests(unittest.TestCase):
             metadata['indices'] = [0, 1, 3]
             path.write_text(json.dumps(metadata), encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'index array'):
+                sky_extension(path)
+
+    def test_rejects_zero_sun_direction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_fixture(Path(directory))
+            metadata = json.loads(path.read_text(encoding='utf-8'))
+            metadata['environment']['sun_direction'] = [0, 0, 0]
+            path.write_text(json.dumps(metadata), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'sun direction'):
                 sky_extension(path)
 
 

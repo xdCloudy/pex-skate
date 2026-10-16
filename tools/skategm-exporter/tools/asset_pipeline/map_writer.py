@@ -110,9 +110,12 @@ def sky_extension(sky_json):
     env=sky['environment'];fog=env['fog'];colour=np.asarray(fog['fog_colour'],dtype=np.float32)
     sun=np.asarray(env['sun_direction'],dtype=np.float32)
     if colour.shape!=(4,) or sun.shape!=(3,):raise ValueError('Invalid authored sky environment')
+    sun_length=float(np.linalg.norm(sun))
+    if not np.isfinite(sun_length) or sun_length<1e-6:raise ValueError('Invalid authored sun direction')
+    sun=sun/sun_length
     values=np.asarray([fog['fog_near'][0],fog['fog_far'][0],fog['fog_power'][0],fog['fog_max'][0],
         *colour,*sun,env['sun_scale'],env['multiplier']],dtype='<f4')
-    if not np.isfinite(values).all() or values[1]<=values[0] or values[2]<=0 or not 0<=values[3]<=1:
+    if not np.isfinite(values).all() or values[1]<=values[0] or values[2]<=0 or not 0<=values[3]<=1 or values[-2]<=0 or values[-1]<0:
         raise ValueError('Invalid authored sky fog or lighting')
     width,height=int(sky['width']),int(sky['height'])
     sun_width,sun_height=int(sky['sun_width']),int(sky['sun_height'])
