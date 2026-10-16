@@ -124,7 +124,7 @@ The supported keyboard actions, including right/left-foot push, brake and steeri
 
 The Rust unit suite, WebAssembly component build, Fabric client build, and local PEX plugin startup can be checked without proprietary game files. A complete gameplay validation still requires a user-supplied Skate 3 asset conversion and a Minecraft 26.3 Fabric client/server session. Do not describe a successful build or plugin load as proof of a complete Skate 3 visual port.
 
-CI also downloads the pinned PEX 1.0.0 Linux server, verifies its SHA-256, approves only the plugin's declared `fs.read.data` permission for the disposable test server, then checks that PEX compiles and loads the component and listens on its Minecraft port. That smoke test validates the server plugin boundary; it does not simulate a player or validate converted-game-data gameplay.
+CI also downloads the pinned PEX 1.0.0 Linux server, verifies its SHA-256, approves only the plugin's declared `fs.read.data` permission for the disposable test server, then checks that PEX compiles and loads the component and completes a Minecraft status handshake advertising version 26.3 (protocol 777). That smoke test validates plugin loading and the public server status protocol; it does not simulate a player, exercise custom payloads, or validate converted-game-data gameplay.
 
 ## License and credits
 

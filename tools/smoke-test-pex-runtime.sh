@@ -2,6 +2,7 @@
 set -euo pipefail
 
 plugin=${1:?usage: smoke-test-pex-runtime.sh <pex-skate.wasm>}
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 server_version=v1.0.0
 server_sha256=198ec31b4fb96ac51970ca5366691da2b44add2954ab55ee0bda446423ed50ba
 server_name=pumpkin-X64-Linux
@@ -50,7 +51,7 @@ for _ in $(seq 1 180); do
     exit 1
   fi
   if grep -q 'uses the following permissions: \["fs.read.data"\]' server.log \
-      && timeout 1 bash -c 'cat </dev/null >/dev/tcp/127.0.0.1/25565' 2>/dev/null; then
+      && python3 "$script_dir/check_pex_status.py" --quiet; then
     ready=true
     break
   fi
@@ -70,4 +71,5 @@ if [[ -z "$module_cache" ]]; then
   exit 1
 fi
 
-echo "PEX $server_version loaded pex-skate.wasm, compiled its Wasmtime module, and listened on port 25565."
+python3 "$script_dir/check_pex_status.py"
+echo "PEX $server_version loaded pex-skate.wasm, compiled its Wasmtime module, and passed the Minecraft 26.3 status handshake."
