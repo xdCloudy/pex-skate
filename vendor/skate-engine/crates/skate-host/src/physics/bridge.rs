@@ -52,16 +52,23 @@ impl Session {
         spawn: [f32; 3],
         heading: f32,
     ) -> Result<Self, String> {
+        let map = collision_map(triangles, rails, spawn, heading);
+        Self::new_with_skate_map(root, &map)
+    }
+
+    /// Build a gameplay session from an authored Skate map package. This keeps
+    /// its retail collision archive, material surfaces, native grind splines,
+    /// and spawn metadata intact instead of reducing it to sampled triangles.
+    pub fn new_with_skate_map(root: &Path, map: &SkateMap) -> Result<Self, String> {
         let started = std::time::Instant::now();
         LOAD_STEP.store(1, std::sync::atomic::Ordering::Relaxed);
         eprintln!("IW4L_SKATE_LOAD begin");
         skate_data::input_config::StockGameplayConfig::load(root).map_err(|e| e.to_string())?;
         let assets = skate_data::GameAssets::load(root).map_err(|e| e.to_string())?;
         let graphs = StockGraphs::load(root, &assets)?;
-        let map = collision_map(triangles, rails, spawn, heading);
         eprintln!("IW4L_SKATE_LOAD graphs {}ms", started.elapsed().as_millis());
         LOAD_STEP.store(2, std::sync::atomic::Ordering::Relaxed);
-        let physics = GamePhysics::load_with_map(root, Some(&map))?;
+        let physics = GamePhysics::load_with_map(root, Some(map))?;
         eprintln!(
             "IW4L_SKATE_LOAD physics {}ms",
             started.elapsed().as_millis()

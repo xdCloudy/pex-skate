@@ -2173,6 +2173,7 @@ name = "pex-skate"
 version = "0.1.0-alpha.33"
 dependencies = [
  "pumpkin-plugin-api",
+ "skate-data",
  "skate-host",
 ]
 

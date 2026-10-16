@@ -3,6 +3,7 @@
 //! data crosses to Fabric as ordinary state payloads.
 
 use crate::physics::Controls;
+use skate_data::skate_map::SkateMap;
 use skate_host::bridge::{self, Session};
 use std::path::Path;
 
@@ -104,6 +105,25 @@ impl SkateSession {
     ) -> Result<Self, String> {
         let mut session = Session::new(asset_root, collision_triangles, rails, spawn, heading)?;
         let initial_pose = session.activate(spawn, heading)?;
+        Ok(Self {
+            session,
+            bone_names: initial_pose.names,
+            bones_root_relative: None,
+            previous_respawn: false,
+        })
+    }
+
+    /// Load the authored retail map package produced from a user's own game
+    /// data. The engine consumes its RWCM collision archive and native rails;
+    /// map coordinates are in the same metre/block space as the PEX adapter.
+    pub fn load_skate_map(asset_root: &Path, map_path: &Path) -> Result<Self, String> {
+        let map = SkateMap::load(map_path)?;
+        let spawn = map.spawn;
+        let heading = map.heading;
+        let mut session = Session::new_with_skate_map(asset_root, &map)?;
+        let initial_pose = session
+            .activate(spawn, heading)
+            .map_err(|error| format!("could not activate Skate map {:?}: {error}", map.name))?;
         Ok(Self {
             session,
             bone_names: initial_pose.names,
