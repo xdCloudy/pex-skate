@@ -31,6 +31,7 @@ import java.security.NoSuchAlgorithmException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
@@ -266,7 +267,8 @@ public final class SkateMapModel {
         for (PendingPrimitive primitive : props.primitives) {
             int texture = primitive.textureIndex == 0 ? 0 : primitive.textureIndex + textureOffset;
             primitives.add(new PendingPrimitive(primitive.positions, primitive.normals, primitive.uv,
-                    primitive.vertexIndirectLight, primitive.indices, primitive.bounds, texture, primitive.color));
+                    primitive.vertexIndirectLight, primitive.indices, primitive.bounds, texture, primitive.color,
+                    primitive.alphaMode));
         }
         return new ParsedModel(district.filename, district.mapName, List.copyOf(textures),
                 List.copyOf(primitives), district.sky, memoryEstimate);
@@ -354,7 +356,7 @@ public final class SkateMapModel {
             for (PendingPrimitive primitive : task.parsed.primitives) {
                 primitives.add(new Primitive(primitive.positions, primitive.normals, primitive.uv,
                         primitive.vertexIndirectLight, primitive.indices, primitive.bounds,
-                        task.textureIds[primitive.textureIndex], primitive.color));
+                        task.textureIds[primitive.textureIndex], primitive.color, primitive.alphaMode));
             }
             PendingSky pendingSky = task.parsed.sky;
             Sky sky = pendingSky == null ? null : new Sky(pendingSky, task.textureIds[pendingSky.diffuseTextureIndex]);
@@ -384,15 +386,26 @@ public final class SkateMapModel {
                     matrices, RenderTypes.entityTranslucent(sky.diffuseTexture),
                     (pose, vertices) -> sky.draw(pose, vertices, camera));
         }
+        List<Primitive> translucent = new ArrayList<>();
         for (Primitive primitive : current.primitives) {
             if (primitive.distanceSquared(camera) > DRAW_DISTANCE * DRAW_DISTANCE) continue;
-            BlockPos lightPosition = primitive.lightSamplePosition();
-            int light = client.level.getBrightness(LightLayer.SKY, lightPosition) << 20
-                    | client.level.getBrightness(LightLayer.BLOCK, lightPosition) << 4;
-            context.submitNodeCollector().submitCustomGeometry(
-                    matrices, RenderTypes.entityCutout(primitive.texture),
-                    (pose, vertices) -> primitive.draw(pose, vertices, light));
+            if (primitive.alphaMode == 2) translucent.add(primitive);
+            else submitPrimitive(context, matrices, client, primitive, false);
         }
+        translucent.sort(Comparator.comparingDouble(
+                (Primitive primitive) -> primitive.centerDistanceSquared(camera)).reversed());
+        for (Primitive primitive : translucent) submitPrimitive(context, matrices, client, primitive, true);
+    }
+
+    private static void submitPrimitive(LevelRenderContext context, PoseStack matrices, Minecraft client,
+                                        Primitive primitive, boolean translucent) {
+        BlockPos lightPosition = primitive.lightSamplePosition();
+        int light = client.level.getBrightness(LightLayer.SKY, lightPosition) << 20
+                | client.level.getBrightness(LightLayer.BLOCK, lightPosition) << 4;
+        context.submitNodeCollector().submitCustomGeometry(
+                matrices, translucent ? RenderTypes.entityTranslucent(primitive.texture)
+                        : RenderTypes.entityCutout(primitive.texture),
+                (pose, vertices) -> primitive.draw(pose, vertices, light));
     }
 
     static void close() {
@@ -451,6 +464,7 @@ public final class SkateMapModel {
         }
         long[] materialTextures = new long[materialCount];
         long[] materialLightmaps = new long[materialCount];
+        int[] materialAlphaModes = new int[materialCount];
         float[] materialLightmapStrengths = new float[materialCount];
         float[][] materialColors = new float[materialCount][4];
         for (int i = 0; i < materialCount; i++) {
@@ -466,7 +480,9 @@ public final class SkateMapModel {
             materialLightmaps[i] = reader.u32(); // baked indirect-light texture, one-based
             reader.skipU32(3); // normal, ORM, emissive
             materialLightmapStrengths[i] = Math.clamp(reader.f32(), 0.0f, 1.0f);
-            reader.skipU32(1); // alpha mode
+            long alphaMode = reader.u32();
+            if (alphaMode > 2) throw new IOException("SKATE material has an unsupported alpha mode");
+            materialAlphaModes[i] = (int) alphaMode;
             reader.skipFloats(1); // alpha cutoff
             reader.skipU32(3); // audio, physics, pattern
             reader.skipU32(1); // depth layer
@@ -559,7 +575,8 @@ public final class SkateMapModel {
             if (texture < 0 || texture > textures.size()) throw new IOException("SKATE material references an invalid texture");
             int[] materialIndices = entry.getValue().toArray();
             primitives.add(new PendingPrimitive(positions, normals, uv, vertexIndirectLight,
-                    materialIndices, primitiveBounds(positions, materialIndices), texture, materialColors[material]));
+                    materialIndices, primitiveBounds(positions, materialIndices), texture, materialColors[material],
+                    materialAlphaModes[material]));
         }
         skipRails(reader, railCount);
         if (doorCount != 0 || lightCount != 0 || routeCount != 0) {
@@ -805,7 +822,7 @@ public final class SkateMapModel {
     }
     private record PendingPrimitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight,
                                     int[] indices, float[] bounds,
-                                    int textureIndex, float[] color) {}
+                                    int textureIndex, float[] color, int alphaMode) {}
     private record ChunkMaterial(int material, int x, int z) {}
 
     private static final class Sky {
@@ -884,9 +901,10 @@ public final class SkateMapModel {
         private final int[] indices;
         private final Identifier texture;
         private final float[] bounds;
+        private final int alphaMode;
 
         private Primitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight, int[] indices,
-                          float[] bounds, Identifier texture, float[] color) {
+                          float[] bounds, Identifier texture, float[] color, int alphaMode) {
             this.positions = positions;
             this.normals = normals;
             this.uv = uv;
@@ -895,6 +913,7 @@ public final class SkateMapModel {
             this.texture = texture;
             this.color = color.clone();
             this.bounds = bounds;
+            this.alphaMode = alphaMode;
         }
 
         private double distanceSquared(Vec3 point) {
@@ -906,6 +925,13 @@ public final class SkateMapModel {
                 distance += delta * delta;
             }
             return distance;
+        }
+
+        private double centerDistanceSquared(Vec3 point) {
+            double dx = (bounds[0] + bounds[3]) * 0.5 - point.x;
+            double dy = (bounds[1] + bounds[4]) * 0.5 - point.y;
+            double dz = (bounds[2] + bounds[5]) * 0.5 - point.z;
+            return dx * dx + dy * dy + dz * dz;
         }
 
         private BlockPos lightSamplePosition() {
