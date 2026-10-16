@@ -10,6 +10,32 @@ fn material() -> RetailContactMaterial {
         restitution: 0.2,
     }
 }
+
+#[test]
+fn replacing_player_collision_keeps_authored_moving_geometry() {
+    let mut world = BoardWorld::new(vec![face(0., 1, 0.)]);
+    world.set_moving(vec![face(4., 2, 0.)]);
+    world.set_player_moving(vec![face(8., 3, 0.)]);
+    world.set_player_moving(vec![face(12., 4, 0.)]);
+
+    let (authored, players) = world.moving_layers();
+    assert_eq!(world.moving_len(), 2);
+    assert_eq!(
+        authored
+            .iter()
+            .map(|triangle| triangle.tag)
+            .collect::<Vec<_>>(),
+        [2]
+    );
+    assert_eq!(
+        players
+            .iter()
+            .map(|triangle| triangle.tag)
+            .collect::<Vec<_>>(),
+        [4]
+    );
+}
+
 fn face(x: f32, tag: u32, fatness: f32) -> WorldTriangle {
     WorldTriangle::from_vertices(
         [

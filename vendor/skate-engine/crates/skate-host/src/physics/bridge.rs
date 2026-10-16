@@ -364,6 +364,32 @@ impl Session {
         Ok(n)
     }
 
+    /// Replace the transient player layer without rebuilding authored moving
+    /// collision such as converted district props.
+    pub fn set_player_collision(
+        &mut self,
+        triangles: Vec<[[f32; 3]; 3]>,
+    ) -> Result<usize, String> {
+        let triangles: Vec<_> = triangles
+            .into_iter()
+            .filter(|t| {
+                let [a, b, c] = t.map(bevy::math::Vec3::from_array);
+                (b - a).cross(c - a).length_squared() > 1e-12
+            })
+            .collect();
+        let moving = if triangles.is_empty() {
+            Vec::new()
+        } else {
+            let map = collision_map(triangles, Vec::new(), [0.; 3], 0.);
+            crate::skate_world::collision_world(&map, self.physics.floor_material())?
+                .triangles()
+                .to_vec()
+        };
+        let count = moving.len();
+        self.physics.set_player_moving(moving);
+        Ok(count)
+    }
+
     pub fn install_collision(&mut self, prepared: PreparedCollision) -> Result<(), String> {
         self.physics
             .install_world(prepared.world, std::sync::Arc::clone(&prepared.grind))?;

@@ -877,6 +877,8 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
         return;
     };
     let now = Instant::now();
+    let world_id = player.as_entity().get_world().get_id();
+    let player_position = player.get_position();
     let (pose, should_refresh_collision, should_broadcast, map_backed, map_filename) = {
         let Ok(mut state) = server_state().lock() else {
             return;
@@ -895,14 +897,45 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             .as_secs_f32()
             .min(0.25);
         let mut remaining = *accumulated;
+        let current_map_backed = state.map_backed.contains(name);
+        let current_map = state.map_filenames.get(name);
+        let mut nearby_players = Vec::new();
+        for (other_name, other_session) in &state.sessions {
+            if other_name == name
+                || state.map_backed.contains(other_name) != current_map_backed
+                || (current_map_backed && state.map_filenames.get(other_name) != current_map)
+            {
+                continue;
+            }
+            let other_pose = other_session.pose();
+            let dx = other_pose.root[0] - player_position.0 as f32;
+            let dy = other_pose.root[1] - player_position.1 as f32;
+            let dz = other_pose.root[2] - player_position.2 as f32;
+            if dx * dx + dy * dy + dz * dz > 9.0 {
+                continue;
+            }
+            let Some(other_player) = server.get_player_by_name(other_name) else {
+                continue;
+            };
+            if other_player.as_entity().get_world().get_id() != world_id {
+                continue;
+            }
+            nearby_players.push(other_pose);
+            if nearby_players.len() == 16 {
+                break;
+            }
+        }
         let Some(session) = state.sessions.get_mut(name) else {
             return;
         };
         let period = session.period().clamp(1.0 / 120.0, 1.0 / 20.0);
         let mut pose = session.pose();
         let mut steps = 0;
-        let mut failure = None;
+        let mut failure = session.refresh_player_collision(&nearby_players).err();
         while remaining >= period && steps < 6 {
+            if failure.is_some() {
+                break;
+            }
             match session.tick(controls) {
                 Ok(next_pose) => pose = next_pose,
                 Err(error) => {

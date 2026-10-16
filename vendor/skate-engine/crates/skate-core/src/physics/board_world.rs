@@ -110,6 +110,11 @@ pub struct BoardWorld {
     /// rest are the moving layer (other players, moving things), swapped in
     /// whole by set_moving without rebuilding the static index
     static_len: usize,
+    /// The prefix of the moving layer authored by the host. Dynamic player
+    /// triangles are replaced independently after this boundary.
+    authored_moving_len: usize,
+    authored_moving_fatness: f32,
+    authored_moving_margin: f32,
     static_fatness: f32,
     static_margin: f32,
     query_metadata: Option<QueryMetadata>,
@@ -155,6 +160,9 @@ impl BoardWorld {
             .fold(0., f32::max);
         Self {
             static_len: triangles.len(),
+            authored_moving_len: triangles.len(),
+            authored_moving_fatness: maximum_fatness,
+            authored_moving_margin: maximum_triangle_margin,
             static_fatness: maximum_fatness,
             static_margin: maximum_triangle_margin,
             triangles,
@@ -205,16 +213,43 @@ impl BoardWorld {
     pub fn set_moving(&mut self, moving: Vec<WorldTriangle>) {
         self.triangles.truncate(self.static_len);
         self.triangle_bounds.truncate(self.static_len);
-        let mut fatness = self.static_fatness;
-        let mut margin = self.static_margin;
+        self.maximum_fatness = self.static_fatness;
+        self.maximum_triangle_margin = self.static_margin;
+        self.append_moving(moving);
+        self.authored_moving_len = self.triangles.len();
+        self.authored_moving_fatness = self.maximum_fatness;
+        self.authored_moving_margin = self.maximum_triangle_margin;
+    }
+
+    /// Replace dynamic player triangles while preserving authored moving
+    /// geometry such as converted map props.
+    pub fn set_player_moving(&mut self, moving: Vec<WorldTriangle>) {
+        self.triangles.truncate(self.authored_moving_len);
+        self.triangle_bounds.truncate(self.authored_moving_len);
+        self.maximum_fatness = self.authored_moving_fatness;
+        self.maximum_triangle_margin = self.authored_moving_margin;
+        self.append_moving(moving);
+    }
+
+    fn append_moving(&mut self, moving: Vec<WorldTriangle>) {
+        let mut fatness = self.maximum_fatness;
+        let mut margin = self.maximum_triangle_margin;
         for t in &moving {
             let b = Bounds::from_points(t.triangle.vertices).unwrap_or(Bounds {
                 min: Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY),
                 max: Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY),
             });
-            let span = (b.max.x - b.min.x).max(b.max.y - b.min.y).max(b.max.z - b.min.z);
+            let span = (b.max.x - b.min.x)
+                .max(b.max.y - b.min.y)
+                .max(b.max.z - b.min.z);
             margin = margin.max(span * (2. * broadphase::THIN_MARGIN));
-            fatness = fatness.max(if t.triangle.fatness.is_finite() && t.triangle.fatness >= 0. { t.triangle.fatness } else { f32::INFINITY });
+            fatness = fatness.max(
+                if t.triangle.fatness.is_finite() && t.triangle.fatness >= 0. {
+                    t.triangle.fatness
+                } else {
+                    f32::INFINITY
+                },
+            );
             self.triangle_bounds.push(b);
         }
         self.triangles.extend(moving);
@@ -226,6 +261,13 @@ impl BoardWorld {
     /// rebuilt static world).
     pub fn moving(&self) -> Vec<WorldTriangle> {
         self.triangles[self.static_len..].to_vec()
+    }
+
+    pub fn moving_layers(&self) -> (Vec<WorldTriangle>, Vec<WorldTriangle>) {
+        (
+            self.triangles[self.static_len..self.authored_moving_len].to_vec(),
+            self.triangles[self.authored_moving_len..].to_vec(),
+        )
     }
 
     /// gm_sk8 addition: how many moving triangles are in.

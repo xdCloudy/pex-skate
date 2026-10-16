@@ -157,7 +157,7 @@ impl SkateSession {
                     prop_collision_path.display()
                 ));
             }
-        }
+        };
         let initial_pose = session
             .activate(spawn, heading)
             .map_err(|error| format!("could not activate Skate map {:?}: {error}", map.name))?;
@@ -197,6 +197,16 @@ impl SkateSession {
     /// Apply Skate 3's vehicle-ejection knockdown to this skater.
     pub fn knock_down(&mut self, velocity: [f32; 3]) -> bool {
         self.session.knock_down(velocity)
+    }
+
+    /// Keep authored prop collision and nearby player proxies in the host's
+    /// moving layer. The host replaces this layer atomically between ticks.
+    pub fn refresh_player_collision(&mut self, players: &[SkatePose]) -> Result<usize, String> {
+        let mut triangles = Vec::new();
+        for player in players {
+            triangles.extend(skater_collision_proxy(player));
+        }
+        self.session.set_player_collision(triangles)
     }
 
     pub fn period(&self) -> f32 {
@@ -323,6 +333,96 @@ impl SkateSession {
             visual: None,
         }
     }
+}
+
+/// A small collision proxy for a remote skater: an octagonal body column and
+/// a board-sized oriented box. It is intentionally collision-only; rendering
+/// continues to use the authoritative skeletal pose.
+pub fn skater_collision_proxy(pose: &SkatePose) -> Vec<[[f32; 3]; 3]> {
+    if pose.root.iter().any(|value| !value.is_finite())
+        || pose.board.iter().any(|value| !value.is_finite())
+        || pose
+            .root
+            .iter()
+            .chain(pose.board.iter())
+            .any(|value| value.abs() > 100_000.0)
+    {
+        return Vec::new();
+    }
+    let mut triangles = Vec::with_capacity(28);
+    const SIDES: usize = 8;
+    let lower = pose.root[1] + 0.12;
+    let upper = pose.root[1] + 1.55;
+    let radius = 0.28;
+    let mut bottom = [[0.0; 3]; SIDES];
+    let mut top = [[0.0; 3]; SIDES];
+    for index in 0..SIDES {
+        let angle = std::f32::consts::TAU * index as f32 / SIDES as f32;
+        let x = pose.root[0] + radius * angle.cos();
+        let z = pose.root[2] + radius * angle.sin();
+        bottom[index] = [x, lower, z];
+        top[index] = [x, upper, z];
+    }
+    for index in 0..SIDES {
+        let next = (index + 1) % SIDES;
+        triangles.push([bottom[index], top[next], bottom[next]]);
+        triangles.push([bottom[index], top[index], top[next]]);
+    }
+
+    let board_center = [pose.board[0], pose.board[1], pose.board[2]];
+    let mut orientation = [pose.board[3], pose.board[4], pose.board[5], pose.board[6]];
+    let norm = orientation
+        .iter()
+        .map(|value| value * value)
+        .sum::<f32>()
+        .sqrt();
+    if norm > 1e-6 {
+        orientation.iter_mut().for_each(|value| *value /= norm);
+    } else {
+        orientation = [0.0, 0.0, 0.0, 1.0];
+    }
+    let rotate = |point: [f32; 3]| {
+        let [x, y, z, w] = orientation;
+        let qv = [x, y, z];
+        let cross1 = [
+            qv[1] * point[2] - qv[2] * point[1],
+            qv[2] * point[0] - qv[0] * point[2],
+            qv[0] * point[1] - qv[1] * point[0],
+        ];
+        let cross2 = [
+            qv[1] * cross1[2] - qv[2] * cross1[1],
+            qv[2] * cross1[0] - qv[0] * cross1[2],
+            qv[0] * cross1[1] - qv[1] * cross1[0],
+        ];
+        std::array::from_fn(|axis| {
+            board_center[axis] + point[axis] + 2.0 * (w * cross1[axis] + cross2[axis])
+        })
+    };
+    let corners: Vec<[f32; 3]> = [
+        [-0.14, -0.045, -0.42],
+        [0.14, -0.045, -0.42],
+        [0.14, 0.045, -0.42],
+        [-0.14, 0.045, -0.42],
+        [-0.14, -0.045, 0.42],
+        [0.14, -0.045, 0.42],
+        [0.14, 0.045, 0.42],
+        [-0.14, 0.045, 0.42],
+    ]
+    .map(rotate)
+    .to_vec();
+    const FACES: [[usize; 4]; 6] = [
+        [0, 3, 2, 1],
+        [4, 5, 6, 7],
+        [0, 1, 5, 4],
+        [1, 2, 6, 5],
+        [2, 3, 7, 6],
+        [3, 0, 4, 7],
+    ];
+    for [a, b, c, d] in FACES {
+        triangles.push([corners[a], corners[b], corners[c]]);
+        triangles.push([corners[a], corners[c], corners[d]]);
+    }
+    triangles
 }
 
 fn authored_prop_collision_path(
@@ -695,11 +795,52 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
 #[cfg(test)]
 mod tests {
     use super::{
-        box_triangles, load_difficulty, load_prop_collision, parse_difficulty,
+        SkatePose, box_triangles, load_difficulty, load_prop_collision, parse_difficulty,
         parse_prop_collision, parse_prop_collision_instances, pressed_edge,
-        prop_collision_triangles, quantize_rotation, to_engine_controls,
+        prop_collision_triangles, quantize_rotation, skater_collision_proxy, to_engine_controls,
     };
     use crate::physics::Controls;
+
+    #[test]
+    fn remote_skater_collision_proxy_covers_board_and_body_with_finite_triangles() {
+        let pose = SkatePose {
+            root: [4.0, 2.0, -3.0],
+            velocity: [0.0; 3],
+            board: [4.0, 2.0, -3.0, 0.0, 0.70710677, 0.0, 0.70710677],
+            trick_name: String::new(),
+            sequence_score: 0.0,
+            line_score: 0.0,
+            total_score: 0.0,
+            multiplier: 1.0,
+            line_time: 0.0,
+            clean: true,
+            sketchy: false,
+            visual: None,
+        };
+        let triangles = skater_collision_proxy(&pose);
+        assert_eq!(triangles.len(), 28);
+        assert!(
+            triangles
+                .iter()
+                .flatten()
+                .flatten()
+                .all(|value| value.is_finite())
+        );
+        assert!(
+            triangles
+                .iter()
+                .flatten()
+                .flatten()
+                .any(|value| *value > 4.3)
+        );
+        assert!(
+            skater_collision_proxy(&SkatePose {
+                root: [f32::NAN, 0.0, 0.0],
+                ..pose
+            })
+            .is_empty()
+        );
+    }
 
     #[test]
     fn input_axes_and_trick_actions_map_to_the_engine_pad_packet() {

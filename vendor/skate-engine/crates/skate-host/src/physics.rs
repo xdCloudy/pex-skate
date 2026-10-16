@@ -355,6 +355,13 @@ impl GamePhysics {
         self.world.set_moving(moving);
     }
 
+    pub(crate) fn set_player_moving(
+        &mut self,
+        moving: Vec<skate_core::physics::board_world::WorldTriangle>,
+    ) {
+        self.world.set_player_moving(moving);
+    }
+
     pub(crate) fn moving_len(&self) -> usize {
         self.world.moving_len()
     }
@@ -368,10 +375,13 @@ impl GamePhysics {
     ) -> Result<(), String> {
         self.offboard_grab_scene = offboard::grab_scene::Registry::new(&world, Vec::new(), Vec::new())?;
         // gm_sk8 addition: the moving layer stays in when the static world changes
-        let moving = self.world.moving();
+        let (moving, players) = self.world.moving_layers();
         let mut world = world;
         if !moving.is_empty() {
             world.set_moving(moving);
+        }
+        if !players.is_empty() {
+            world.set_player_moving(players);
         }
         self.world = world;
         self.grind_world = grind_world;
