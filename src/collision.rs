@@ -18,7 +18,7 @@ pub struct LocalCollision {
 }
 
 /// A resumable local collision scan. `advance` bounds the number of host world
-/// queries performed during one server movement callback.
+/// queries performed during one server tick callback.
 pub struct CollisionScan {
     origin: (i32, i32, i32),
     center: (f32, f32, f32),

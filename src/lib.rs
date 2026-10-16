@@ -12,6 +12,7 @@ use pumpkin_plugin_api::{
     events::{
         EventHandler, EventPriority,
         player::{PlayerCustomPayloadEvent, PlayerMoveEvent},
+        server::ServerTickEndEvent,
     },
     permissions,
     text::TextComponent,
@@ -27,7 +28,7 @@ const INPUT_TIMEOUT: Duration = Duration::from_millis(250);
 const STATE_BROADCAST_INTERVAL: Duration = Duration::from_millis(50);
 const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
-const COLLISION_BLOCKS_PER_MOVEMENT: usize = 1_024;
+const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -103,6 +104,13 @@ impl Plugin for PexSkate {
                 true,
             )
             .map_err(|error| format!("could not register movement handler: {error}"))?;
+        context
+            .register_event_handler::<ServerTickEndEvent, _>(
+                SkateTick,
+                EventPriority::Normal,
+                false,
+            )
+            .map_err(|error| format!("could not register server tick handler: {error}"))?;
         context
             .register_event_handler::<pumpkin_plugin_api::events::player::PlayerLeaveEvent, _>(
                 SkatePlayerLeave,
@@ -312,91 +320,113 @@ struct SkateMovement;
 impl EventHandler<PlayerMoveEvent> for SkateMovement {
     fn handle(
         &self,
-        server: Server,
+        _server: Server,
         mut event: pumpkin_plugin_api::events::EventData<PlayerMoveEvent>,
     ) -> pumpkin_plugin_api::events::EventData<PlayerMoveEvent> {
         let name = event.player.get_name();
-        let Ok(mut state) = server_state().lock() else {
+        let Ok(state) = server_state().lock() else {
             return event;
         };
-        if !state.enabled.contains(&name) {
-            return event;
-        }
-
-        let now = Instant::now();
-        let controls = state.controls_for(&name, now);
-        let previous = state
-            .engine_updated_at
-            .insert(name.clone(), now)
-            .unwrap_or(now);
-        let accumulated = state.engine_accumulator.entry(name.clone()).or_default();
-        *accumulated += now
-            .saturating_duration_since(previous)
-            .as_secs_f32()
-            .min(0.25);
-        let mut remaining = *accumulated;
-        let engine_result = if let Some(session) = state.sessions.get_mut(&name) {
-            let period = session.period().clamp(1.0 / 120.0, 1.0 / 20.0);
-            let mut pose = session.pose();
-            let mut steps = 0;
-            let mut failure = None;
-            while remaining >= period && steps < 6 {
-                match session.tick(controls) {
-                    Ok(next_pose) => pose = next_pose,
-                    Err(error) => {
-                        failure = Some(error);
-                        break;
-                    }
-                }
-                remaining -= period;
-                steps += 1;
-            }
-            if steps == 6 {
-                remaining = remaining.min(period);
-            }
-            match failure {
-                Some(error) => Err(error),
-                None => Ok(pose),
-            }
-        } else {
+        let Some(session) = state.sessions.get(&name) else {
             return event;
         };
-        let mut pose = match engine_result {
-            Ok(pose) => {
-                state.engine_accumulator.insert(name.clone(), remaining);
-                pose
-            }
-            Err(error) => {
-                state.sessions.remove(&name);
-                state.enabled.remove(&name);
-                state.controls.remove(&name);
-                state.control_updated_at.remove(&name);
-                state.engine_accumulator.remove(&name);
-                state.engine_updated_at.remove(&name);
-                state.last_broadcast_at.remove(&name);
-                state.collision_center.remove(&name);
-                state.collision_scans.remove(&name);
-                event.to_position = event.from_position;
-                let position = event.from_position;
-                let yaw = event.player.get_yaw();
-                let entity_id = event.player.as_entity().get_id();
-                drop(state);
-                broadcast_state(&server, entity_id, position, yaw, 0.0, false);
-                event.player.send_system_message(
-                    TextComponent::text(&format!(
-                        "Skate Engine stopped after a simulation error: {error}"
-                    )),
-                    true,
-                );
-                return event;
-            }
-        };
+        let pose = session.pose();
         event.to_position = (
             f64::from(pose.root[0]),
             f64::from(pose.root[1]),
             f64::from(pose.root[2]),
         );
-        let center = state.collision_center.get(&name).copied().unwrap_or((
+        event
+    }
+}
+
+struct SkateTick;
+
+impl EventHandler<ServerTickEndEvent> for SkateTick {
+    fn handle(
+        &self,
+        server: Server,
+        event: pumpkin_plugin_api::events::EventData<ServerTickEndEvent>,
+    ) -> pumpkin_plugin_api::events::EventData<ServerTickEndEvent> {
+        let names = server_state()
+            .lock()
+            .map(|state| state.enabled.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for name in names {
+            tick_skater(&server, &name);
+        }
+        event
+    }
+}
+
+fn tick_skater(server: &Server, name: &str) {
+    let Some(player) = server.get_player_by_name(name) else {
+        return;
+    };
+    let now = Instant::now();
+    let (pose, should_refresh_collision, should_broadcast) = {
+        let Ok(mut state) = server_state().lock() else {
+            return;
+        };
+        if !state.enabled.contains(name) {
+            return;
+        }
+        let controls = state.controls_for(name, now);
+        let previous = state
+            .engine_updated_at
+            .insert(name.to_owned(), now)
+            .unwrap_or(now);
+        let accumulated = state.engine_accumulator.entry(name.to_owned()).or_default();
+        *accumulated += now
+            .saturating_duration_since(previous)
+            .as_secs_f32()
+            .min(0.25);
+        let mut remaining = *accumulated;
+        let Some(session) = state.sessions.get_mut(name) else {
+            return;
+        };
+        let period = session.period().clamp(1.0 / 120.0, 1.0 / 20.0);
+        let mut pose = session.pose();
+        let mut steps = 0;
+        let mut failure = None;
+        while remaining >= period && steps < 6 {
+            match session.tick(controls) {
+                Ok(next_pose) => pose = next_pose,
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+            remaining -= period;
+            steps += 1;
+        }
+        if steps == 6 {
+            remaining = remaining.min(period);
+        }
+        if let Some(error) = failure {
+            state.sessions.remove(name);
+            state.enabled.remove(name);
+            state.controls.remove(name);
+            state.control_updated_at.remove(name);
+            state.engine_accumulator.remove(name);
+            state.engine_updated_at.remove(name);
+            state.last_broadcast_at.remove(name);
+            state.collision_center.remove(name);
+            state.collision_scans.remove(name);
+            drop(state);
+            let entity_id = player.as_entity().get_id();
+            let position = player.get_position();
+            broadcast_state(server, entity_id, position, player.get_yaw(), 0.0, false);
+            player.send_system_message(
+                TextComponent::text(&format!(
+                    "Skate Engine stopped after a simulation error: {error}"
+                )),
+                true,
+            );
+            return;
+        }
+        state.engine_accumulator.insert(name.to_owned(), remaining);
+        let center = state.collision_center.get(name).copied().unwrap_or((
             pose.root[0],
             pose.root[1],
             pose.root[2],
@@ -404,36 +434,48 @@ impl EventHandler<PlayerMoveEvent> for SkateMovement {
         let should_refresh_collision = collision_refresh_needed(center, pose.root);
         let should_broadcast = state
             .last_broadcast_at
-            .get(&name)
+            .get(name)
             .is_none_or(|last| now.saturating_duration_since(*last) >= STATE_BROADCAST_INTERVAL);
         if should_broadcast {
-            state.last_broadcast_at.insert(name.clone(), now);
-            if let Some(session) = state.sessions.get_mut(&name) {
+            state.last_broadcast_at.insert(name.to_owned(), now);
+            if let Some(session) = state.sessions.get_mut(name) {
                 pose.visual = session.skeletal_pose();
             }
         }
-        let entity_id = event.player.as_entity().get_id();
-        drop(state);
-        let world = event.player.as_entity().get_world();
-        let scan_center = (
-            f64::from(pose.root[0]),
-            f64::from(pose.root[1]),
-            f64::from(pose.root[2]),
+        (pose, should_refresh_collision, should_broadcast)
+    };
+
+    let root = (
+        f64::from(pose.root[0]),
+        f64::from(pose.root[1]),
+        f64::from(pose.root[2]),
+    );
+    let world = player.as_entity().get_world();
+    if let Err(error) = advance_collision_scan(
+        &world,
+        name,
+        should_refresh_collision,
+        root,
+        COLLISION_BLOCKS_PER_TICK,
+    ) {
+        stop_skate_for_player(server, &player, name, error);
+        return;
+    }
+
+    let current = player.get_position();
+    let dx = current.0 - root.0;
+    let dy = current.1 - root.1;
+    let dz = current.2 - root.2;
+    if dx * dx + dy * dy + dz * dz > 0.0001 {
+        player.teleport(
+            root,
+            Some(player.get_yaw()),
+            Some(player.get_pitch()),
+            world,
         );
-        if let Err(error) = advance_collision_scan(
-            &world,
-            &name,
-            should_refresh_collision,
-            scan_center,
-            COLLISION_BLOCKS_PER_MOVEMENT,
-        ) {
-            stop_skate_after_collision_error(&server, &mut event, &name, entity_id, error);
-            return event;
-        }
-        if should_broadcast {
-            broadcast_pose(&server, entity_id, &pose, true);
-        }
-        event
+    }
+    if should_broadcast {
+        broadcast_pose(server, player.as_entity().get_id(), &pose, true);
     }
 }
 
@@ -484,11 +526,10 @@ fn advance_collision_scan(
     Ok(())
 }
 
-fn stop_skate_after_collision_error(
+fn stop_skate_for_player(
     server: &Server,
-    event: &mut pumpkin_plugin_api::events::EventData<PlayerMoveEvent>,
+    player: &pumpkin_plugin_api::Player,
     name: &str,
-    entity_id: u32,
     error: String,
 ) {
     if let Ok(mut state) = server_state().lock() {
@@ -502,8 +543,8 @@ fn stop_skate_after_collision_error(
         state.collision_center.remove(name);
         state.collision_scans.remove(name);
     }
-    event.to_position = event.from_position;
-    event.player.send_system_message(
+    let position = player.get_position();
+    player.send_system_message(
         TextComponent::text(&format!(
             "Skate Engine stopped while updating local collision: {error}"
         )),
@@ -511,9 +552,9 @@ fn stop_skate_after_collision_error(
     );
     broadcast_state(
         server,
-        entity_id,
-        event.from_position,
-        event.player.get_yaw(),
+        player.as_entity().get_id(),
+        position,
+        player.get_yaw(),
         0.0,
         false,
     );
