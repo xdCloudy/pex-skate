@@ -54,7 +54,8 @@ public final class SkateMapModel {
     private static final long LOAD_RETRY_COOLDOWN_NANOS = 5_000_000_000L;
     private static final long PROP_INTERPOLATION_NANOS = 50_000_000L;
     private static final double DRAW_DISTANCE = 256.0;
-    private static final float[] NO_PROP_OFFSET = new float[0];
+    private static final PropTransformSample NO_PROP_OFFSET = new PropTransformSample(
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     private static final List<Identifier> TEXTURES = new ArrayList<>();
     private static final Set<Integer> ACTIVE_MAP_SKATERS = ConcurrentHashMap.newKeySet();
     private static final Map<PropInstanceKey, PropOffset> DYNAMIC_PROP_OFFSETS = new ConcurrentHashMap<>();
@@ -386,13 +387,23 @@ public final class SkateMapModel {
         long now = System.nanoTime();
         for (SkateStatePayload.PropTransform update : updates) {
             if (Float.isFinite(update.x()) && Float.isFinite(update.y()) && Float.isFinite(update.z())
+                    && Float.isFinite(update.yaw()) && Float.isFinite(update.pivotX())
+                    && Float.isFinite(update.pivotY()) && Float.isFinite(update.pivotZ())
                     && Math.abs(update.x()) <= 100_000.0f && Math.abs(update.y()) <= 100_000.0f
-                    && Math.abs(update.z()) <= 100_000.0f) {
+                    && Math.abs(update.z()) <= 100_000.0f && Math.abs(update.pivotX()) <= 100_000.0f
+                    && Math.abs(update.pivotY()) <= 100_000.0f && Math.abs(update.pivotZ()) <= 100_000.0f
+                    && Math.abs(update.yaw()) <= 7.0f) {
                 PropInstanceKey key = new PropInstanceKey(filename.toLowerCase(Locale.ROOT),
                         propsSha256.toLowerCase(Locale.ROOT), update.identity());
                 DYNAMIC_PROP_OFFSETS.compute(key, (ignored, previous) -> {
-                    float[] start = previous == null ? new float[3] : previous.sample(now);
-                    return new PropOffset(start, new float[] {update.x(), update.y(), update.z()}, now);
+                    PropTransformSample start = previous == null
+                            ? new PropTransformSample(0.0f, 0.0f, 0.0f, 0.0f,
+                                    update.pivotX(), update.pivotY(), update.pivotZ())
+                            : previous.sample(now);
+                    return new PropOffset(new float[] {start.x(), start.y(), start.z()},
+                            new float[] {update.x(), update.y(), update.z()},
+                            start.yaw(), update.yaw(),
+                            new float[] {update.pivotX(), update.pivotY(), update.pivotZ()}, now);
                 });
             }
         }
@@ -457,7 +468,7 @@ public final class SkateMapModel {
         if (current == null || ACTIVE_MAP_SKATERS.isEmpty() || client.level == null) return;
         Vec3 camera = context.gameRenderer().mainCamera().position();
         long sampleTime = System.nanoTime();
-        Map<Long, float[]> sampledPropOffsets = new HashMap<>();
+        Map<Long, PropTransformSample> sampledPropOffsets = new HashMap<>();
         PoseStack matrices = new PoseStack();
         matrices.translate(-camera.x, -camera.y, -camera.z);
         if (current.sky != null) {
@@ -468,7 +479,7 @@ public final class SkateMapModel {
         }
         List<Primitive> translucent = new ArrayList<>();
         for (Primitive primitive : current.primitives) {
-            float[] offset = propOffset(current, primitive, sampledPropOffsets, sampleTime);
+            PropTransformSample offset = propOffset(current, primitive, sampledPropOffsets, sampleTime);
             if (primitive.distanceSquared(camera, offset) > DRAW_DISTANCE * DRAW_DISTANCE) continue;
             if (primitive.alphaMode == 2) translucent.add(primitive);
             else submitPrimitive(context, matrices, client, primitive, false, offset);
@@ -482,10 +493,10 @@ public final class SkateMapModel {
         }
     }
 
-    private static float[] propOffset(Model current, Primitive primitive,
-                                     Map<Long, float[]> frameOffsets, long sampleTime) {
+    private static PropTransformSample propOffset(Model current, Primitive primitive,
+                                                  Map<Long, PropTransformSample> frameOffsets, long sampleTime) {
         if (primitive.propInstanceId == 0L) return null;
-        float[] cached = frameOffsets.get(primitive.propInstanceId);
+        PropTransformSample cached = frameOffsets.get(primitive.propInstanceId);
         if (cached != null) return cached == NO_PROP_OFFSET ? null : cached;
         PropOffset offset = DYNAMIC_PROP_OFFSETS.get(new PropInstanceKey(current.filename.toLowerCase(Locale.ROOT),
                 current.propsSha256.toLowerCase(Locale.ROOT), primitive.propInstanceId));
@@ -493,26 +504,32 @@ public final class SkateMapModel {
             frameOffsets.put(primitive.propInstanceId, NO_PROP_OFFSET);
             return null;
         }
-        float[] sampled = offset.sample(sampleTime);
+        PropTransformSample sampled = offset.sample(sampleTime);
         frameOffsets.put(primitive.propInstanceId, sampled);
         return sampled;
     }
 
-    private record PropOffset(float[] start, float[] target, long startedAtNanos) {
-        private float[] sample(long now) {
+    private record PropOffset(float[] startTranslation, float[] targetTranslation,
+                              float startYaw, float targetYaw, float[] pivot, long startedAtNanos) {
+        private PropTransformSample sample(long now) {
             long elapsed = Math.max(0L, now - startedAtNanos);
-            if (elapsed >= PROP_INTERPOLATION_NANOS) return target;
-            float amount = (float) elapsed / PROP_INTERPOLATION_NANOS;
-            return new float[] {
-                    start[0] + (target[0] - start[0]) * amount,
-                    start[1] + (target[1] - start[1]) * amount,
-                    start[2] + (target[2] - start[2]) * amount
-            };
+            float amount = Math.min(1.0f, (float) elapsed / PROP_INTERPOLATION_NANOS);
+            float yawDelta = targetYaw - startYaw;
+            if (yawDelta > Math.PI) yawDelta -= (float) Math.PI * 2.0f;
+            if (yawDelta < -Math.PI) yawDelta += (float) Math.PI * 2.0f;
+            return new PropTransformSample(
+                    startTranslation[0] + (targetTranslation[0] - startTranslation[0]) * amount,
+                    startTranslation[1] + (targetTranslation[1] - startTranslation[1]) * amount,
+                    startTranslation[2] + (targetTranslation[2] - startTranslation[2]) * amount,
+                    startYaw + yawDelta * amount, pivot[0], pivot[1], pivot[2]);
         }
     }
 
+    private record PropTransformSample(float x, float y, float z, float yaw,
+                                       float pivotX, float pivotY, float pivotZ) {}
+
     private static void submitPrimitive(LevelRenderContext context, PoseStack matrices, Minecraft client,
-                                        Primitive primitive, boolean translucent, float[] offset) {
+                                        Primitive primitive, boolean translucent, PropTransformSample offset) {
         BlockPos lightPosition = primitive.lightSamplePosition(offset);
         int light = client.level.getBrightness(LightLayer.SKY, lightPosition) << 20
                 | client.level.getBrightness(LightLayer.BLOCK, lightPosition) << 4;
@@ -1134,13 +1151,24 @@ public final class SkateMapModel {
             this.sunIntensity = sky == null ? 0.0f : Math.min(1.0f, sky.sunScale * sky.exposure);
         }
 
-        private double distanceSquared(Vec3 point, float[] offset) {
+        private double distanceSquared(Vec3 point, PropTransformSample offset) {
+            if (offset != null) {
+                double dx = transformedCenterX(offset) - point.x;
+                double dy = (bounds[1] + bounds[4]) * 0.5 + offset.y() - point.y;
+                double dz = transformedCenterZ(offset) - point.z;
+                double radius = Math.sqrt(
+                        (bounds[3] - bounds[0]) * (bounds[3] - bounds[0])
+                                + (bounds[4] - bounds[1]) * (bounds[4] - bounds[1])
+                                + (bounds[5] - bounds[2]) * (bounds[5] - bounds[2])) * 0.5;
+                double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                double outside = Math.max(0.0, distance - radius);
+                return outside * outside;
+            }
             double distance = 0.0;
             for (int axis = 0; axis < 3; axis++) {
                 double value = axis == 0 ? point.x : axis == 1 ? point.y : point.z;
-                float move = offset == null ? 0.0f : offset[axis];
-                double minimum = bounds[axis] + move;
-                double maximum = bounds[axis + 3] + move;
+                double minimum = bounds[axis];
+                double maximum = bounds[axis + 3];
                 double delta = value < minimum ? minimum - value
                         : value > maximum ? value - maximum : 0.0;
                 distance += delta * delta;
@@ -1148,29 +1176,59 @@ public final class SkateMapModel {
             return distance;
         }
 
-        private double centerDistanceSquared(Vec3 point, float[] offset) {
-            double dx = (bounds[0] + bounds[3]) * 0.5 + (offset == null ? 0.0f : offset[0]) - point.x;
-            double dy = (bounds[1] + bounds[4]) * 0.5 + (offset == null ? 0.0f : offset[1]) - point.y;
-            double dz = (bounds[2] + bounds[5]) * 0.5 + (offset == null ? 0.0f : offset[2]) - point.z;
+        private double centerDistanceSquared(Vec3 point, PropTransformSample offset) {
+            double dx = (offset == null ? (bounds[0] + bounds[3]) * 0.5 : transformedCenterX(offset)) - point.x;
+            double dy = (bounds[1] + bounds[4]) * 0.5 + (offset == null ? 0.0f : offset.y()) - point.y;
+            double dz = (offset == null ? (bounds[2] + bounds[5]) * 0.5 : transformedCenterZ(offset)) - point.z;
             return dx * dx + dy * dy + dz * dz;
         }
 
-        private BlockPos lightSamplePosition(float[] offset) {
-            return BlockPos.containing(
-                    (bounds[0] + bounds[3]) * 0.5 + (offset == null ? 0.0f : offset[0]),
-                    (bounds[1] + bounds[4]) * 0.5 + (offset == null ? 0.0f : offset[1]),
-                    (bounds[2] + bounds[5]) * 0.5 + (offset == null ? 0.0f : offset[2]));
+        private double transformedCenterX(PropTransformSample offset) {
+            double x = (bounds[0] + bounds[3]) * 0.5 - offset.pivotX();
+            double z = (bounds[2] + bounds[5]) * 0.5 - offset.pivotZ();
+            return offset.pivotX() + offset.x() + Math.cos(offset.yaw()) * x + Math.sin(offset.yaw()) * z;
         }
 
-        private void draw(PoseStack.Pose pose, VertexConsumer output, int light, float[] offset) {
-            float offsetX = offset == null ? 0.0f : offset[0];
-            float offsetY = offset == null ? 0.0f : offset[1];
-            float offsetZ = offset == null ? 0.0f : offset[2];
+        private double transformedCenterZ(PropTransformSample offset) {
+            double x = (bounds[0] + bounds[3]) * 0.5 - offset.pivotX();
+            double z = (bounds[2] + bounds[5]) * 0.5 - offset.pivotZ();
+            return offset.pivotZ() + offset.z() - Math.sin(offset.yaw()) * x + Math.cos(offset.yaw()) * z;
+        }
+
+        private BlockPos lightSamplePosition(PropTransformSample offset) {
+            return BlockPos.containing(
+                    offset == null ? (bounds[0] + bounds[3]) * 0.5 : transformedCenterX(offset),
+                    (bounds[1] + bounds[4]) * 0.5 + (offset == null ? 0.0f : offset.y()),
+                    offset == null ? (bounds[2] + bounds[5]) * 0.5 : transformedCenterZ(offset));
+        }
+
+        private void draw(PoseStack.Pose pose, VertexConsumer output, int light, PropTransformSample offset) {
+            float offsetX = offset == null ? 0.0f : offset.x();
+            float offsetY = offset == null ? 0.0f : offset.y();
+            float offsetZ = offset == null ? 0.0f : offset.z();
+            float yaw = offset == null ? 0.0f : offset.yaw();
+            float cosYaw = (float) Math.cos(yaw);
+            float sinYaw = (float) Math.sin(yaw);
+            float pivotX = offset == null ? 0.0f : offset.pivotX();
+            float pivotZ = offset == null ? 0.0f : offset.pivotZ();
             Vector3f normal = new Vector3f();
             for (int index : indices) {
                 int point = index * 3;
                 int texCoord = index * 2;
+                float relativeX = positions[point] - pivotX;
+                float relativeZ = positions[point + 2] - pivotZ;
+                float x = offset == null ? positions[point] : pivotX + offsetX
+                        + cosYaw * relativeX + sinYaw * relativeZ;
+                float y = positions[point + 1] + offsetY;
+                float z = offset == null ? positions[point + 2] : pivotZ + offsetZ
+                        - sinYaw * relativeX + cosYaw * relativeZ;
                 normal.set(normals[point], normals[point + 1], normals[point + 2]);
+                if (offset != null) {
+                    float normalX = normal.x;
+                    float normalZ = normal.z;
+                    normal.x = cosYaw * normalX + sinYaw * normalZ;
+                    normal.z = -sinYaw * normalX + cosYaw * normalZ;
+                }
                 pose.normal().transform(normal).normalize();
                 float red = color[0] * vertexIndirectLight[point];
                 float green = color[1] * vertexIndirectLight[point + 1];
@@ -1183,9 +1241,6 @@ public final class SkateMapModel {
                     blue += sun;
                 }
                 if (!lights.isEmpty()) {
-                    float x = positions[point] + offsetX;
-                    float y = positions[point + 1] + offsetY;
-                    float z = positions[point + 2] + offsetZ;
                     for (AuthoredLight authored : lights) {
                         double dx = authored.position.x - x;
                         double dy = authored.position.y - y;
@@ -1212,8 +1267,7 @@ public final class SkateMapModel {
                         blue += authored.color[2] * amount;
                     }
                 }
-                output.addVertex(pose, positions[point] + offsetX,
-                                positions[point + 1] + offsetY, positions[point + 2] + offsetZ)
+                output.addVertex(pose, x, y, z)
                         .setColor(Math.min(1.0f, red), Math.min(1.0f, green), Math.min(1.0f, blue), color[3])
                         .setUv(uv[texCoord], uv[texCoord + 1])
                         .setLight(light)

@@ -8,8 +8,19 @@ const BOARD_HALF_EXTENTS: [f32; 3] = [0.32, 0.16, 0.48];
 const MIN_IMPACT_SPEED: f32 = 1.0;
 const IMPULSE_SCALE: f32 = 0.28;
 const MAX_PROP_SPEED: f32 = 7.0;
+const MAX_PROP_ANGULAR_SPEED: f32 = 4.0;
 const LINEAR_DAMPING: f32 = 2.2;
+const ANGULAR_DAMPING: f32 = 2.8;
 pub const MAX_PROP_UPDATES: usize = 8_192;
+const TAU: f32 = std::f32::consts::TAU;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PropUpdate {
+    pub identity: u64,
+    pub translation: [f32; 3],
+    pub yaw: f32,
+    pub pivot: [f32; 3],
+}
 
 #[derive(Clone, Debug)]
 pub struct PropBody {
@@ -17,7 +28,10 @@ pub struct PropBody {
     pub transform: [f32; 16],
     local_bounds: [f32; 6],
     velocity: [f32; 3],
-    initial_position: [f32; 3],
+    translation: [f32; 3],
+    angular_velocity: f32,
+    initial_pivot: [f32; 3],
+    yaw: f32,
     revision: u64,
 }
 
@@ -42,8 +56,8 @@ impl PropWorld {
             .collect()
     }
 
-    /// Return the latest translation for each body changed since `revision`.
-    pub fn changes_since(&self, revision: u64) -> (Vec<(u64, [f32; 3])>, u64) {
+    /// Return the latest transform for each body changed since `revision`.
+    pub fn changes_since(&self, revision: u64) -> (Vec<PropUpdate>, u64) {
         let mut bodies = self
             .bodies
             .iter()
@@ -54,15 +68,11 @@ impl PropWorld {
         let changes = bodies
             .iter()
             .take(count)
-            .map(|body| {
-                (
-                    body.identity,
-                    [
-                        body.transform[12] - body.initial_position[0],
-                        body.transform[13] - body.initial_position[1],
-                        body.transform[14] - body.initial_position[2],
-                    ],
-                )
+            .map(|body| PropUpdate {
+                identity: body.identity,
+                translation: body.translation,
+                yaw: body.yaw,
+                pivot: body.initial_pivot,
             })
             .collect();
         let acknowledged_revision = bodies
@@ -106,14 +116,18 @@ impl PropWorld {
                     }
                 }
             }
-            if let Some((index, _)) = hit {
+            if let Some((index, time)) = hit {
                 let horizontal = [board_velocity[0], 0.0, board_velocity[2]];
                 let horizontal_speed = length(horizontal);
                 if horizontal_speed >= MIN_IMPACT_SPEED {
                     let direction = horizontal.map(|value| value / horizontal_speed);
+                    let impulse = direction.map(|value| value * horizontal_speed * IMPULSE_SCALE);
+                    let impact: [f32; 3] = std::array::from_fn(|axis| {
+                        board_from[axis] + (board_to[axis] - board_from[axis]) * time
+                    });
                     let body = &mut self.bodies[index];
                     for axis in 0..3 {
-                        body.velocity[axis] += direction[axis] * (horizontal_speed * IMPULSE_SCALE);
+                        body.velocity[axis] += impulse[axis];
                     }
                     let body_speed = length(body.velocity);
                     if body_speed > MAX_PROP_SPEED {
@@ -121,6 +135,16 @@ impl PropWorld {
                             *component *= MAX_PROP_SPEED / body_speed;
                         }
                     }
+                    let pivot = body.current_pivot();
+                    let lever_arm = [impact[0] - pivot[0], impact[2] - pivot[2]];
+                    let torque_y = lever_arm[1] * impulse[0] - lever_arm[0] * impulse[2];
+                    let inertia = world_bounds(body).map_or(1.0, |bounds| {
+                        let width = bounds[3] - bounds[0];
+                        let depth = bounds[5] - bounds[2];
+                        ((width * width + depth * depth) / 12.0).max(0.1)
+                    });
+                    body.angular_velocity = (body.angular_velocity + torque_y / inertia)
+                        .clamp(-MAX_PROP_ANGULAR_SPEED, MAX_PROP_ANGULAR_SPEED);
                 }
             }
         }
@@ -135,6 +159,7 @@ impl PropWorld {
                 let movement = body.velocity[axis] * dt;
                 if movement.abs() > 1e-6 {
                     body.transform[offset] += movement;
+                    body.translation[axis] += movement;
                     changed = true;
                     body_changed = true;
                 }
@@ -142,6 +167,18 @@ impl PropWorld {
                 if body.velocity[axis].abs() < 0.01 {
                     body.velocity[axis] = 0.0;
                 }
+            }
+            body.angular_velocity *= (-ANGULAR_DAMPING * dt).exp();
+            if body.angular_velocity.abs() < 0.01 {
+                body.angular_velocity = 0.0;
+            }
+            let yaw_delta = body.angular_velocity * dt;
+            if yaw_delta.abs() > 1e-6 {
+                let pivot = body.current_pivot();
+                rotate_about_pivot(&mut body.transform, pivot, yaw_delta);
+                body.yaw = (body.yaw + yaw_delta).rem_euclid(TAU);
+                changed = true;
+                body_changed = true;
             }
             if body_changed {
                 revision = revision.wrapping_add(1);
@@ -155,16 +192,39 @@ impl PropWorld {
 
 impl PropBody {
     pub fn new(identity: u64, transform: [f32; 16], local_bounds: [f32; 6]) -> Self {
-        let initial_position = [transform[12], transform[13], transform[14]];
+        let initial_origin = [transform[12], transform[13], transform[14]];
+        let local_pivot =
+            std::array::from_fn(|axis| (local_bounds[axis] + local_bounds[axis + 3]) * 0.5);
+        let initial_pivot = transform_point(local_pivot, &transform).unwrap_or(initial_origin);
         Self {
             identity,
             transform,
             local_bounds,
             velocity: [0.0; 3],
-            initial_position,
+            translation: [0.0; 3],
+            angular_velocity: 0.0,
+            initial_pivot,
+            yaw: 0.0,
             revision: 0,
         }
     }
+
+    fn current_pivot(&self) -> [f32; 3] {
+        std::array::from_fn(|axis| self.initial_pivot[axis] + self.translation[axis])
+    }
+}
+
+fn rotate_about_pivot(matrix: &mut [f32; 16], pivot: [f32; 3], angle: f32) {
+    let (sin, cos) = angle.sin_cos();
+    let old_x = [matrix[0], matrix[4], matrix[8]];
+    let old_z = [matrix[2], matrix[6], matrix[10]];
+    for column in 0..3 {
+        matrix[column * 4] = cos * old_x[column] + sin * old_z[column];
+        matrix[column * 4 + 2] = -sin * old_x[column] + cos * old_z[column];
+    }
+    let relative = [matrix[12] - pivot[0], matrix[14] - pivot[2]];
+    matrix[12] = pivot[0] + cos * relative[0] + sin * relative[1];
+    matrix[14] = pivot[2] - sin * relative[0] + cos * relative[1];
 }
 
 fn world_bounds(body: &PropBody) -> Option<[f32; 6]> {
@@ -258,8 +318,8 @@ mod tests {
         assert!(world.step([-3.0, 0.0, 0.0], [3.0, 0.0, 0.0], [8.0, 0.0, 0.0], 0.05));
         let (updates, revision) = world.changes_since(0);
         assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].0, 0x1234);
-        assert!(updates[0].1[0] > 0.0);
+        assert_eq!(updates[0].identity, 0x1234);
+        assert!(updates[0].translation[0] > 0.0);
         assert!(world.changes_since(revision).0.is_empty());
         let transforms = world.transforms();
         assert_eq!(transforms[0].0, 0x1234);
@@ -271,7 +331,6 @@ mod tests {
         let mut farther = box_body();
         farther.identity = 2;
         farther.transform[12] = 4.0;
-        farther.initial_position[0] = 4.0;
         let nearer = box_body();
         let mut world = PropWorld::new(vec![farther, nearer]);
         world.step([-3.0, 0.0, 0.0], [7.0, 0.0, 0.0], [8.0, 0.0, 0.0], 0.05);
@@ -280,6 +339,23 @@ mod tests {
         let nearer = transforms.iter().find(|(id, _)| *id == 0x1234).unwrap();
         assert!((farther.1[12] - 4.0).abs() < 1e-6);
         assert!(nearer.1[12] > 0.0);
+    }
+
+    #[test]
+    fn off_center_board_impact_rotates_prop_about_its_collision_pivot() {
+        let mut world = PropWorld::new(vec![box_body()]);
+        assert!(world.step([-3.0, 0.0, 0.35], [3.0, 0.0, 0.35], [8.0, 0.0, 0.0], 0.05));
+        let (updates, _) = world.changes_since(0);
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].yaw > 0.0);
+        assert!(world.transforms()[0].1[0] < 1.0);
+        assert!(world.transforms()[0].1[2] < 0.0);
+        let body = &world.bodies[0];
+        let pivot_from_transform = super::transform_point([0.0; 3], &body.transform).unwrap();
+        let expected_pivot = body.current_pivot();
+        for axis in 0..3 {
+            assert!((pivot_from_transform[axis] - expected_pivot[axis]).abs() < 1e-5);
+        }
     }
 
     #[test]
@@ -316,13 +392,16 @@ mod tests {
 
         let (updates, acknowledged) = world.changes_since(0);
         assert_eq!(updates.len(), MAX_PROP_UPDATES);
-        assert_eq!(updates[0].0, 0);
-        assert_eq!(updates[MAX_PROP_UPDATES - 1].0, MAX_PROP_UPDATES as u64 - 1);
+        assert_eq!(updates[0].identity, 0);
+        assert_eq!(
+            updates[MAX_PROP_UPDATES - 1].identity,
+            MAX_PROP_UPDATES as u64 - 1
+        );
         assert_eq!(acknowledged, MAX_PROP_UPDATES as u64);
 
         let (remaining, final_revision) = world.changes_since(acknowledged);
         assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].0, MAX_PROP_UPDATES as u64);
+        assert_eq!(remaining[0].identity, MAX_PROP_UPDATES as u64);
         assert_eq!(final_revision, MAX_PROP_UPDATES as u64 + 1);
     }
 

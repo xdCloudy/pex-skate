@@ -32,7 +32,8 @@ public record SkateStatePayload(
         int acknowledgedControlSequence,
         List<PropTransform> propTransforms
 ) implements CustomPacketPayload {
-    public record PropTransform(long identity, float x, float y, float z) {}
+    public record PropTransform(long identity, float x, float y, float z,
+                                float yaw, float pivotX, float pivotY, float pivotZ) {}
 
     public static final Type<SkateStatePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath("pexskate", "state"));
     public static final StreamCodec<RegistryFriendlyByteBuf, SkateStatePayload> CODEC = StreamCodec.of(
@@ -91,12 +92,19 @@ public record SkateStatePayload(
                         buffer.writeFloat(transform.x());
                         buffer.writeFloat(transform.y());
                         buffer.writeFloat(transform.z());
+                        if (payload.version() >= 11) {
+                            buffer.writeFloat(transform.yaw());
+                            buffer.writeFloat(transform.pivotX());
+                            buffer.writeFloat(transform.pivotY());
+                            buffer.writeFloat(transform.pivotZ());
+                        }
                     }
                 }
             },
             buffer -> {
                 byte version = buffer.readByte();
-                if (version != 4 && version != 5 && version != 6 && version != 7 && version != 8 && version != 9 && version != 10) {
+                if (version != 4 && version != 5 && version != 6 && version != 7 && version != 8
+                        && version != 9 && version != 10 && version != 11) {
                     throw new IllegalArgumentException("Unsupported PEX Skate state version " + version);
                 }
                 boolean active = buffer.readBoolean();
@@ -138,7 +146,15 @@ public record SkateStatePayload(
                     if (propCount > 8192) throw new IllegalArgumentException("PEX Skate prop update count exceeds protocol limit");
                     var updates = new java.util.ArrayList<PropTransform>(propCount);
                     for (int i = 0; i < propCount; i++) {
-                        updates.add(new PropTransform(buffer.readLong(), buffer.readFloat(), buffer.readFloat(), buffer.readFloat()));
+                        long identity = buffer.readLong();
+                        float x = buffer.readFloat();
+                        float y = buffer.readFloat();
+                        float z = buffer.readFloat();
+                        float yaw = version >= 11 ? buffer.readFloat() : 0.0f;
+                        float pivotX = version >= 11 ? buffer.readFloat() : 0.0f;
+                        float pivotY = version >= 11 ? buffer.readFloat() : 0.0f;
+                        float pivotZ = version >= 11 ? buffer.readFloat() : 0.0f;
+                        updates.add(new PropTransform(identity, x, y, z, yaw, pivotX, pivotY, pivotZ));
                     }
                     propTransforms = List.copyOf(updates);
                 }

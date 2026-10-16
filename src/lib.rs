@@ -35,7 +35,7 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
-const CLIENT_PROTOCOL_VERSION: u8 = 6;
+const CLIENT_PROTOCOL_VERSION: u8 = 7;
 const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 
 fn server_state() -> &'static Mutex<ServerState> {
@@ -1564,10 +1564,10 @@ fn broadcast_pose(
     map_filename: Option<&str>,
     map_digests: Option<&MapDigests>,
     acknowledged_sequence: u32,
-    prop_updates: &[(u64, [f32; 3])],
+    prop_updates: &[prop_physics::PropUpdate],
 ) {
     let mut payload = Vec::with_capacity(1100);
-    payload.push(10); // version
+    payload.push(11); // version
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in pose.root {
@@ -1603,12 +1603,16 @@ fn broadcast_pose(
     broadcast_payload(server, &payload);
 }
 
-fn append_prop_updates(payload: &mut Vec<u8>, updates: &[(u64, [f32; 3])]) {
+fn append_prop_updates(payload: &mut Vec<u8>, updates: &[prop_physics::PropUpdate]) {
     let count = updates.len().min(prop_physics::MAX_PROP_UPDATES);
     payload.extend_from_slice(&(count as u16).to_be_bytes());
-    for (identity, translation) in updates.iter().take(count) {
-        payload.extend_from_slice(&identity.to_be_bytes());
-        for value in translation {
+    for update in updates.iter().take(count) {
+        payload.extend_from_slice(&update.identity.to_be_bytes());
+        for value in update.translation {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        payload.extend_from_slice(&update.yaw.to_be_bytes());
+        for value in update.pivot {
             payload.extend_from_slice(&value.to_be_bytes());
         }
     }
@@ -1698,7 +1702,7 @@ fn broadcast_state(
     active: bool,
 ) {
     let mut payload = Vec::with_capacity(84);
-    payload.push(10);
+    payload.push(11);
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in [position.0 as f32, position.1 as f32, position.2 as f32] {
@@ -2083,18 +2087,38 @@ mod integration_tests {
     #[test]
     fn prop_translation_updates_have_a_bounded_big_endian_wire_layout() {
         let mut payload = Vec::new();
-        append_prop_updates(&mut payload, &[(0x0123_4567_89AB_CDEF, [0.25, -1.5, 2.0])]);
-        assert_eq!(payload.len(), 22);
+        append_prop_updates(
+            &mut payload,
+            &[prop_physics::PropUpdate {
+                identity: 0x0123_4567_89AB_CDEF,
+                translation: [0.25, -1.5, 2.0],
+                yaw: 0.75,
+                pivot: [1.0, 2.0, 3.0],
+            }],
+        );
+        assert_eq!(payload.len(), 38);
         assert_eq!(&payload[..2], &1_u16.to_be_bytes());
         assert_eq!(&payload[2..10], &0x0123_4567_89AB_CDEF_u64.to_be_bytes());
         assert_eq!(&payload[10..14], &0.25_f32.to_be_bytes());
         assert_eq!(&payload[14..18], &(-1.5_f32).to_be_bytes());
         assert_eq!(&payload[18..22], &2.0_f32.to_be_bytes());
+        assert_eq!(&payload[22..26], &0.75_f32.to_be_bytes());
+        assert_eq!(&payload[26..30], &1.0_f32.to_be_bytes());
+        assert_eq!(&payload[30..34], &2.0_f32.to_be_bytes());
+        assert_eq!(&payload[34..38], &3.0_f32.to_be_bytes());
     }
 
     #[test]
     fn prop_translation_updates_match_the_client_count_limit() {
-        let updates = vec![(1, [0.0; 3]); 8_193];
+        let updates = vec![
+            prop_physics::PropUpdate {
+                identity: 1,
+                translation: [0.0; 3],
+                yaw: 0.0,
+                pivot: [0.0; 3],
+            };
+            8_193
+        ];
         let mut payload = Vec::new();
         append_prop_updates(&mut payload, &updates);
         assert_eq!(
@@ -2103,7 +2127,7 @@ mod integration_tests {
         );
         assert_eq!(
             payload.len(),
-            2 + prop_physics::MAX_PROP_UPDATES * (8 + 3 * 4)
+            2 + prop_physics::MAX_PROP_UPDATES * (8 + 7 * 4)
         );
     }
 
