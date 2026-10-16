@@ -52,10 +52,11 @@ public final class SkateMapModel {
     private static final int MAX_INDICES = 24_000_000;
     private static final long MAX_TEXTURE_PIXELS = 96_000_000L;
     private static final long LOAD_RETRY_COOLDOWN_NANOS = 5_000_000_000L;
+    private static final long PROP_INTERPOLATION_NANOS = 50_000_000L;
     private static final double DRAW_DISTANCE = 256.0;
     private static final List<Identifier> TEXTURES = new ArrayList<>();
     private static final Set<Integer> ACTIVE_MAP_SKATERS = ConcurrentHashMap.newKeySet();
-    private static final Map<PropInstanceKey, float[]> DYNAMIC_PROP_OFFSETS = new ConcurrentHashMap<>();
+    private static final Map<PropInstanceKey, PropOffset> DYNAMIC_PROP_OFFSETS = new ConcurrentHashMap<>();
     private static volatile Model model;
     private static volatile String attemptedFilename;
     private static volatile String loadingFilename;
@@ -381,13 +382,17 @@ public final class SkateMapModel {
     static void acceptPropTransforms(String filename, String propsSha256,
                                      List<SkateStatePayload.PropTransform> updates) {
         if (filename == null || filename.isBlank() || propsSha256 == null || propsSha256.isBlank()) return;
+        long now = System.nanoTime();
         for (SkateStatePayload.PropTransform update : updates) {
             if (Float.isFinite(update.x()) && Float.isFinite(update.y()) && Float.isFinite(update.z())
                     && Math.abs(update.x()) <= 100_000.0f && Math.abs(update.y()) <= 100_000.0f
                     && Math.abs(update.z()) <= 100_000.0f) {
-                DYNAMIC_PROP_OFFSETS.put(new PropInstanceKey(filename.toLowerCase(Locale.ROOT),
-                        propsSha256.toLowerCase(Locale.ROOT), update.identity()),
-                        new float[] {update.x(), update.y(), update.z()});
+                PropInstanceKey key = new PropInstanceKey(filename.toLowerCase(Locale.ROOT),
+                        propsSha256.toLowerCase(Locale.ROOT), update.identity());
+                DYNAMIC_PROP_OFFSETS.compute(key, (ignored, previous) -> {
+                    float[] start = previous == null ? new float[3] : previous.sample(now);
+                    return new PropOffset(start, new float[] {update.x(), update.y(), update.z()}, now);
+                });
             }
         }
     }
@@ -472,8 +477,22 @@ public final class SkateMapModel {
 
     private static float[] propOffset(Model current, Primitive primitive) {
         if (primitive.propInstanceId == 0L) return null;
-        return DYNAMIC_PROP_OFFSETS.get(new PropInstanceKey(current.filename.toLowerCase(Locale.ROOT),
+        PropOffset offset = DYNAMIC_PROP_OFFSETS.get(new PropInstanceKey(current.filename.toLowerCase(Locale.ROOT),
                 current.propsSha256.toLowerCase(Locale.ROOT), primitive.propInstanceId));
+        return offset == null ? null : offset.sample(System.nanoTime());
+    }
+
+    private record PropOffset(float[] start, float[] target, long startedAtNanos) {
+        private float[] sample(long now) {
+            long elapsed = Math.max(0L, now - startedAtNanos);
+            if (elapsed >= PROP_INTERPOLATION_NANOS) return target;
+            float amount = (float) elapsed / PROP_INTERPOLATION_NANOS;
+            return new float[] {
+                    start[0] + (target[0] - start[0]) * amount,
+                    start[1] + (target[1] - start[1]) * amount,
+                    start[2] + (target[2] - start[2]) * amount
+            };
+        }
     }
 
     private static void submitPrimitive(LevelRenderContext context, PoseStack matrices, Minecraft client,

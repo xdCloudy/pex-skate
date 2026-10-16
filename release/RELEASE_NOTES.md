@@ -3,6 +3,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 ### What's included
 
 - Server-authoritative skating physics, tricks, animations, score state, and third-person camera presentation.
+- Server-authoritative DMO prop translation with client-side interpolation between state snapshots.
 - Fabric client controls, board/skater presentation, and map rendering.
 - Portable PEX WebAssembly plugin and Windows ISO conversion/setup helper.
 - Keyboard and standard gamepad controls for skating and tricks.
@@ -15,4 +16,4 @@ See `INSTALL.md` in `PEX-Skate-26.3.zip`. Each player needs the Fabric client an
 
 ### Known limitations
 
-This is an alpha and is not production-ready. It has not been validated in a live PEX server/client session using converted Skate 3 data. Swept board impacts can translate authored district props, damp their motion, and synchronize the transforms to clients; prop rotation, authored mass, and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions are not implemented. Multiplayer behavior and long-distance skating still need live gameplay validation.
+This is an alpha and is not production-ready. It has not been validated in a live PEX server/client session using converted Skate 3 data. Swept board impacts can translate authored district props, damp their motion, and synchronize the transforms to clients; clients interpolate those offsets between snapshots. Prop rotation, authored mass, and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions are not implemented. Multiplayer behavior and long-distance skating still need live gameplay validation.
