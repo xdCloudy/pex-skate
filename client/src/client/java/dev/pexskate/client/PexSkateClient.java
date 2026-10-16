@@ -4,7 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.math.Transformation;
 import org.lwjgl.sdl.SDLGamepad;
 import org.lwjgl.sdl.SDLInit;
-import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.sdl.SDLStdinc;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -207,7 +207,7 @@ public final class PexSkateClient implements ClientModInitializer {
                         if (gamepadHandle != 0L) break;
                     }
                 } finally {
-                    MemoryUtil.memFree(gamepads);
+                    SDLStdinc.SDL_free(gamepads);
                 }
             }
         }
