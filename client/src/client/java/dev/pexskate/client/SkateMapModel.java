@@ -407,13 +407,25 @@ final class SkateMapModel {
             return;
         }
         TextureData texture = textures.get((int) textureId - 1);
-        int x = Math.min((int) (Math.clamp(u, 0.0f, 1.0f) * texture.width), texture.width - 1);
-        int y = Math.min((int) (Math.clamp(v, 0.0f, 1.0f) * texture.height), texture.height - 1);
-        int color = (y * texture.width + x) * 4;
+        float xPosition = Math.clamp(u, 0.0f, 1.0f) * (texture.width - 1);
+        float yPosition = Math.clamp(v, 0.0f, 1.0f) * (texture.height - 1);
+        int x0 = (int) xPosition, y0 = (int) yPosition;
+        int x1 = Math.min(x0 + 1, texture.width - 1), y1 = Math.min(y0 + 1, texture.height - 1);
+        float xBlend = xPosition - x0, yBlend = yPosition - y0;
         for (int channel = 0; channel < 3; channel++) {
-            float baked = (texture.rgba[color + channel] & 255) / 255.0f;
+            float topLeft = texturePixel(texture, x0, y0, channel);
+            float topRight = texturePixel(texture, x1, y0, channel);
+            float bottomLeft = texturePixel(texture, x0, y1, channel);
+            float bottomRight = texturePixel(texture, x1, y1, channel);
+            float top = topLeft + (topRight - topLeft) * xBlend;
+            float bottom = bottomLeft + (bottomRight - bottomLeft) * xBlend;
+            float baked = top + (bottom - top) * yBlend;
             output[offset + channel] = 1.0f + strength * (baked - 1.0f);
         }
+    }
+
+    private static float texturePixel(TextureData texture, int x, int y, int channel) {
+        return (texture.rgba[(y * texture.width + x) * 4 + channel] & 255) / 255.0f;
     }
 
     private static void skipRetailDefinition(Reader reader, int textureCount) throws IOException {
