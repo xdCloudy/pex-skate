@@ -1046,7 +1046,11 @@ fn broadcast_pose(
 
 fn append_map_identity(payload: &mut Vec<u8>, map_backed: bool, map_filename: Option<&str>) {
     payload.push(u8::from(map_backed));
-    let map_filename = map_filename.unwrap_or_default().as_bytes();
+    let map_filename = if map_backed {
+        map_filename.unwrap_or_default().as_bytes()
+    } else {
+        &[]
+    };
     let map_filename_len = map_filename.len().min(u16::MAX as usize);
     payload.extend_from_slice(&(map_filename_len as u16).to_be_bytes());
     payload.extend_from_slice(&map_filename[..map_filename_len]);
@@ -1295,6 +1299,7 @@ mod integration_tests {
     fn handshake_requires_the_supported_client_protocol_version() {
         assert!(supports_client_protocol(&[CLIENT_PROTOCOL_VERSION]));
         assert!(!supports_client_protocol(&[1]));
+        assert!(!supports_client_protocol(&[2]));
         assert!(!supports_client_protocol(&[CLIENT_PROTOCOL_VERSION, 0]));
         assert!(!supports_client_protocol(&[]));
     }
@@ -1307,7 +1312,7 @@ mod integration_tests {
         assert_eq!(&payload[3..], b"University.skate");
 
         payload.clear();
-        append_map_identity(&mut payload, false, None);
+        append_map_identity(&mut payload, false, Some("ignored.skate"));
         assert_eq!(payload, [0, 0, 0]);
     }
 
@@ -1316,6 +1321,10 @@ mod integration_tests {
         let mut state = ServerState::default();
         state.compatible_clients.insert("rider".into());
         state.enabled.insert("rider".into());
+        state.map_backed.insert("rider".into());
+        state
+            .map_filenames
+            .insert("rider".into(), "University.skate".into());
         state.pending_loads.insert("rider".into());
         state.pending_initial_scans.insert(
             "rider".into(),
@@ -1347,6 +1356,8 @@ mod integration_tests {
         assert!(!clear_skate_state(&mut state, "rider"));
         assert!(state.compatible_clients.contains("rider"));
         assert!(!state.enabled.contains("rider"));
+        assert!(!state.map_backed.contains("rider"));
+        assert!(!state.map_filenames.contains_key("rider"));
         assert!(!state.pending_loads.contains("rider"));
         assert!(!state.pending_initial_scans.contains_key("rider"));
         assert!(!state.controls.contains_key("rider"));
