@@ -54,6 +54,7 @@ public final class SkateMapModel {
     private static final long LOAD_RETRY_COOLDOWN_NANOS = 5_000_000_000L;
     private static final long PROP_INTERPOLATION_NANOS = 50_000_000L;
     private static final double DRAW_DISTANCE = 256.0;
+    private static final float[] NO_PROP_OFFSET = new float[0];
     private static final List<Identifier> TEXTURES = new ArrayList<>();
     private static final Set<Integer> ACTIVE_MAP_SKATERS = ConcurrentHashMap.newKeySet();
     private static final Map<PropInstanceKey, PropOffset> DYNAMIC_PROP_OFFSETS = new ConcurrentHashMap<>();
@@ -455,6 +456,8 @@ public final class SkateMapModel {
         Minecraft client = Minecraft.getInstance();
         if (current == null || ACTIVE_MAP_SKATERS.isEmpty() || client.level == null) return;
         Vec3 camera = context.gameRenderer().mainCamera().position();
+        long sampleTime = System.nanoTime();
+        Map<Long, float[]> sampledPropOffsets = new HashMap<>();
         PoseStack matrices = new PoseStack();
         matrices.translate(-camera.x, -camera.y, -camera.z);
         if (current.sky != null) {
@@ -465,21 +468,34 @@ public final class SkateMapModel {
         }
         List<Primitive> translucent = new ArrayList<>();
         for (Primitive primitive : current.primitives) {
-            float[] offset = propOffset(current, primitive);
+            float[] offset = propOffset(current, primitive, sampledPropOffsets, sampleTime);
             if (primitive.distanceSquared(camera, offset) > DRAW_DISTANCE * DRAW_DISTANCE) continue;
             if (primitive.alphaMode == 2) translucent.add(primitive);
-            else submitPrimitive(context, matrices, client, current, primitive, false);
+            else submitPrimitive(context, matrices, client, primitive, false, offset);
         }
         translucent.sort(Comparator.comparingDouble(
-                (Primitive primitive) -> primitive.centerDistanceSquared(camera, propOffset(current, primitive))).reversed());
-        for (Primitive primitive : translucent) submitPrimitive(context, matrices, client, current, primitive, true);
+                (Primitive primitive) -> primitive.centerDistanceSquared(
+                        camera, propOffset(current, primitive, sampledPropOffsets, sampleTime))).reversed());
+        for (Primitive primitive : translucent) {
+            submitPrimitive(context, matrices, client, primitive, true,
+                    propOffset(current, primitive, sampledPropOffsets, sampleTime));
+        }
     }
 
-    private static float[] propOffset(Model current, Primitive primitive) {
+    private static float[] propOffset(Model current, Primitive primitive,
+                                     Map<Long, float[]> frameOffsets, long sampleTime) {
         if (primitive.propInstanceId == 0L) return null;
+        float[] cached = frameOffsets.get(primitive.propInstanceId);
+        if (cached != null) return cached == NO_PROP_OFFSET ? null : cached;
         PropOffset offset = DYNAMIC_PROP_OFFSETS.get(new PropInstanceKey(current.filename.toLowerCase(Locale.ROOT),
                 current.propsSha256.toLowerCase(Locale.ROOT), primitive.propInstanceId));
-        return offset == null ? null : offset.sample(System.nanoTime());
+        if (offset == null) {
+            frameOffsets.put(primitive.propInstanceId, NO_PROP_OFFSET);
+            return null;
+        }
+        float[] sampled = offset.sample(sampleTime);
+        frameOffsets.put(primitive.propInstanceId, sampled);
+        return sampled;
     }
 
     private record PropOffset(float[] start, float[] target, long startedAtNanos) {
@@ -496,8 +512,7 @@ public final class SkateMapModel {
     }
 
     private static void submitPrimitive(LevelRenderContext context, PoseStack matrices, Minecraft client,
-                                        Model current, Primitive primitive, boolean translucent) {
-        float[] offset = propOffset(current, primitive);
+                                        Primitive primitive, boolean translucent, float[] offset) {
         BlockPos lightPosition = primitive.lightSamplePosition(offset);
         int light = client.level.getBrightness(LightLayer.SKY, lightPosition) << 20
                 | client.level.getBrightness(LightLayer.BLOCK, lightPosition) << 4;

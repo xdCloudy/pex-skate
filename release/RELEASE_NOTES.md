@@ -4,6 +4,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 
 - Server-authoritative skating physics, tricks, animations, score state, and third-person camera presentation.
 - Server-authoritative DMO prop translation with client-side interpolation between state snapshots.
+- Frame-consistent prop rendering with one sampled transform per instance per render frame.
 - Fabric client controls, board/skater presentation, and map rendering.
 - Portable PEX WebAssembly plugin and Windows ISO conversion/setup helper.
 - Keyboard and standard gamepad controls for skating and tricks.
