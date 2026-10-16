@@ -885,25 +885,9 @@ mod tests {
 
     #[test]
     fn prop_collision_instances_transform_local_triangles_and_check_ids() {
-        let mut bytes = b"PEXCOL3\0".to_vec();
-        bytes.extend(1u32.to_le_bytes());
-        bytes.extend(7u64.to_le_bytes());
-        let mut matrix = [0.0f32; 16];
-        matrix[0] = 1.0;
-        matrix[5] = 1.0;
-        matrix[10] = 1.0;
-        matrix[12] = 10.0;
-        matrix[13] = 20.0;
-        matrix[14] = 30.0;
-        matrix[15] = 1.0;
-        for value in matrix {
-            bytes.extend(value.to_le_bytes());
-        }
-        bytes.extend(1u32.to_le_bytes());
-        for value in [0.0f32, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 0.0] {
-            bytes.extend(value.to_le_bytes());
-        }
-        let mut instances = parse_prop_collision_instances(&bytes).unwrap();
+        let bytes =
+            include_bytes!("../tools/skategm-exporter/tests/fixtures/pexcol3-one-instance.bin");
+        let mut instances = parse_prop_collision_instances(bytes).unwrap();
         assert_eq!(
             prop_collision_triangles(&instances).unwrap(),
             vec![[[10.0, 20.0, 30.0], [12.0, 20.0, 30.0], [10.0, 23.0, 30.0]]]
@@ -913,10 +897,11 @@ mod tests {
             prop_collision_triangles(&instances).unwrap()[0][0],
             [12.0, 20.0, 30.0]
         );
-        let record = bytes[12..].to_vec();
-        bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
-        bytes.extend(record);
-        assert!(parse_prop_collision_instances(&bytes).is_err());
+        let mut duplicate = bytes.to_vec();
+        let record = duplicate[12..].to_vec();
+        duplicate[8..12].copy_from_slice(&2u32.to_le_bytes());
+        duplicate.extend(record);
+        assert!(parse_prop_collision_instances(&duplicate).is_err());
     }
 
     #[test]

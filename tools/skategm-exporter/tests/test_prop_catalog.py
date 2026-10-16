@@ -84,11 +84,13 @@ class PropCatalogTests(unittest.TestCase):
     def test_collision_instances_store_stable_ids_local_meshes_and_transforms(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'University.instances'
-            triangles = np.array([[[1, 2, 3], [4, 2, 3], [1, 5, 3]]], dtype='f4')
+            triangles = np.array([[[0, 0, 0], [2, 0, 0], [0, 3, 0]]], dtype='f4')
             transform = np.eye(4, dtype='f4')
             transform[3, :3] = [10, 20, 30]
             self.assertEqual(write_collision_instances(path, [(7, transform, triangles)]), 1)
             data = path.read_bytes()
+            fixture = Path(__file__).parent / 'fixtures' / 'pexcol3-one-instance.bin'
+            self.assertEqual(data, fixture.read_bytes())
             self.assertEqual(struct.unpack('<8sI', data[:12]), (b'PEXCOL3\0', 1))
             identity, *record = struct.unpack('<Q16fI', data[12:12 + struct.calcsize('<Q16fI')])
             self.assertEqual(identity, 7)
