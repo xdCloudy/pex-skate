@@ -613,9 +613,9 @@ public final class SkateMapModel {
                     materialAlphaModes[material]));
         }
         skipRails(reader, railCount);
-        if (doorCount != 0 || lightCount != 0 || routeCount != 0) {
-            throw new IOException("district doors, lights, and NPC routes are not supported by the Fabric renderer yet");
-        }
+        skipDoors(reader, doorCount, 14);
+        skipLights(reader, lightCount);
+        skipRoutes(reader, routeCount);
         PendingSky sky = null;
         int extensionCount = checkedInt(reader.u32(), 20, "map extension count");
         for (int extension = 0; extension < extensionCount; extension++) {
@@ -658,6 +658,39 @@ public final class SkateMapModel {
             } else {
                 throw new IOException("unsupported SKATE rail representation " + representation);
             }
+        }
+    }
+
+    private static void skipDoors(Reader reader, long count, int version) throws IOException {
+        for (long i = 0; i < count; i++) {
+            reader.string();
+            reader.skipFloats(18 + 5 + (version >= 5 ? 3 : 0) + 2);
+            reader.skipU32(1); // surface
+            int vertices = checkedInt(reader.u32(), MAX_VERTICES, "door vertex count");
+            int indices = checkedInt(reader.u32(), MAX_INDICES, "door index count");
+            int collisions = checkedInt(reader.u32(), MAX_INDICES / 3, "door collision count");
+            if (indices % 3 != 0) throw new IOException("invalid SKATE door index count");
+            long bytes = (long) vertices * (version >= 12 ? 56 : 44)
+                    + (long) indices * 4 + (long) collisions * (version >= 11 ? 48 : 44);
+            if (bytes > Integer.MAX_VALUE) throw new IOException("SKATE door geometry exceeds parser bounds");
+            reader.skip((int) bytes);
+        }
+    }
+
+    private static void skipLights(Reader reader, long count) throws IOException {
+        for (long i = 0; i < count; i++) {
+            reader.string();
+            reader.skipU32(1); // light type
+            reader.skipFloats(14); // position, direction, color, intensity, range, radius, cone
+        }
+    }
+
+    private static void skipRoutes(Reader reader, long count) throws IOException {
+        for (long i = 0; i < count; i++) {
+            reader.string();
+            reader.skipU32(4); // closed, skater count, speed, spacing
+            int points = checkedInt(reader.u32(), 1_000_000, "NPC route point count");
+            reader.skip(Math.multiplyExact(points, 12));
         }
     }
 
