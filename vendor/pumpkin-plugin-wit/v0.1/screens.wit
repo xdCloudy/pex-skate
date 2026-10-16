@@ -1,0 +1,31 @@
+package pumpkin:plugin@0.1.0;
+
+interface screens {
+  enum screen {
+    generic-nine-by-one,
+    generic-nine-by-two,
+    generic-nine-by-three,
+    generic-nine-by-four,
+    generic-nine-by-five,
+    generic-nine-by-six,
+    generic-three-by-three,
+    crafter-three-by-three,
+    anvil,
+    beacon,
+    blast-furnace,
+    brewing-stand,
+    crafting,
+    enchantment,
+    furnace,
+    grindstone,
+    hopper,
+    lectern,
+    loom,
+    merchant,
+    shulker-box,
+    smithing,
+    smoker,
+    cartography-table,
+    stonecutter,
+  }
+}

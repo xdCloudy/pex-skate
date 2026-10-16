@@ -1,0 +1,17 @@
+[package]
+name = "pex-skate"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "A portable PEX server plugin for the experimental PEX Skate client/server bridge."
+license = "GPL-3.0-only"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pumpkin-plugin-api = { path = "vendor/pumpkin-plugin-api" }
+
+[package.metadata.component]
+package = "pexskate:server"
+

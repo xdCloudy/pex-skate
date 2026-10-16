@@ -1,0 +1,44 @@
+name: Build PEX Skate
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Install cargo-component
+        run: cargo install cargo-component --locked
+      - name: Test server physics and plugin API integration
+        run: cargo test --locked
+      - name: Build PEX component
+        run: cargo component build --release --target wasm32-wasip2
+      - name: Build Fabric client companion
+        working-directory: client
+        run: ./gradlew build
+      - name: Assemble release files
+        run: |
+          mkdir -p dist
+          cp target/wasm32-wasip1/release/pex_skate.wasm dist/pex-skate.wasm
+          cp client/build/libs/pex-skate-client-0.1.0-alpha.1.jar dist/pex-skate-client-26.3.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pex-skate-26.3
+          path: dist/*
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "pexskate",
+  "version": "${version}",
+  "name": "PEX Skate Client",
+  "description": "Client controls and third-person camera for PEX Skate servers.",
+  "authors": ["PEX Skate contributors"],
+  "license": "GPL-3.0-only",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.pexskate.client.PexSkateClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

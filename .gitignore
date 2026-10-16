@@ -1,0 +1,6 @@
+/target/
+/dist/
+/_research/
+/client/.gradle/
+/client/build/
+/client/.loom/
