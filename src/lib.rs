@@ -471,7 +471,7 @@ impl EventHandler<PlayerCustomPayloadEvent> for SkateInput {
             };
             state.controls.insert(name.clone(), controls);
             state.control_updated_at.insert(name.clone(), now);
-            if controls.shove && !previous.shove {
+            if shove_pressed_edge(controls, previous, previous_is_fresh) {
                 state
                     .sessions
                     .get_mut(&name)
@@ -525,6 +525,10 @@ fn apply_shove_to_nearest_skater(
     {
         target.knock_down(velocity);
     }
+}
+
+fn shove_pressed_edge(current: Controls, previous: Controls, previous_is_fresh: bool) -> bool {
+    current.shove && (!previous_is_fresh || !previous.shove)
 }
 
 fn shove_impact(attacker: &SkatePose, target: [f32; 3]) -> Option<([f32; 3], f32)> {
@@ -1254,8 +1258,8 @@ mod integration_tests {
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, ServerState,
         append_map_identity, append_visual, clear_skate_state, collision::CollisionScan,
         collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
-        physics::Controls, should_refresh_collision, shove_impact, supports_client_protocol,
-        take_collision_budget,
+        physics::Controls, should_refresh_collision, shove_impact, shove_pressed_edge,
+        supports_client_protocol, take_collision_budget,
     };
     use engine::SkatePose;
     use std::time::{Duration, Instant};
@@ -1315,6 +1319,20 @@ mod integration_tests {
         assert!(shove_impact(&attacker, [1.0, 0.0, 0.0]).is_none());
         assert!(shove_impact(&attacker, [0.0, 0.0, 2.0]).is_none());
         assert!(shove_impact(&attacker, [0.0, 2.0, 1.0]).is_none());
+    }
+
+    #[test]
+    fn shove_action_uses_fresh_input_edges_and_recovers_after_stale_packets() {
+        let pressed = Controls {
+            shove: true,
+            ..Controls::default()
+        };
+        let held = pressed;
+        let released = Controls::default();
+        assert!(shove_pressed_edge(pressed, released, true));
+        assert!(!shove_pressed_edge(held, pressed, true));
+        assert!(!shove_pressed_edge(released, pressed, true));
+        assert!(shove_pressed_edge(pressed, held, false));
     }
 
     #[test]
