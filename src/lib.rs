@@ -69,6 +69,7 @@ struct ServerState {
     collision_center: HashMap<String, (f32, f32, f32)>,
     collision_scans: HashMap<String, CollisionScan>,
     collision_scan_cursor: Option<String>,
+    collision_poses: HashMap<String, SkatePose>,
     collision_impacts: HashMap<(String, String), Instant>,
 }
 
@@ -310,6 +311,7 @@ impl CommandHandler for ToggleSkate {
                     state.controls.insert(name.clone(), Controls::default());
                     state.control_updated_at.insert(name.clone(), now);
                     state.sessions.insert(name.clone(), session);
+                    state.collision_poses.insert(name.clone(), pose.clone());
                     state.engine_accumulator.insert(name.clone(), 0.0);
                     state.engine_updated_at.insert(name.clone(), now);
                     state.last_broadcast_at.insert(name.clone(), now);
@@ -395,6 +397,7 @@ fn clear_skate_state(state: &mut ServerState, name: &str) -> bool {
     state.last_broadcast_at.remove(name);
     state.collision_center.remove(name);
     state.collision_scans.remove(name);
+    state.collision_poses.remove(name);
     state
         .collision_impacts
         .retain(|(left, right), _| left != name && right != name);
@@ -691,6 +694,86 @@ fn player_collision_impact(attacker: &SkatePose, target: &SkatePose) -> Option<[
     ])
 }
 
+/// Detect a board-to-rider hit along authoritative poses sampled on the
+/// previous and current server updates. This closes the tunnelling gap in the
+/// point-only check when a fast skater travels through a target between
+/// broadcasts.
+fn swept_player_collision_impact(
+    attacker_previous: &SkatePose,
+    attacker: &SkatePose,
+    target_previous: &SkatePose,
+    target: &SkatePose,
+) -> Option<[f32; 3]> {
+    let values = attacker_previous
+        .board
+        .iter()
+        .chain(attacker.board.iter())
+        .chain(attacker.velocity.iter())
+        .chain(target_previous.root.iter())
+        .chain(target.root.iter())
+        .chain(target.velocity.iter());
+    if values.clone().any(|value| !value.is_finite()) {
+        return None;
+    }
+
+    let relative_start = [
+        target_previous.root[0] - attacker_previous.board[0],
+        target_previous.root[1] - attacker_previous.board[1],
+        target_previous.root[2] - attacker_previous.board[2],
+    ];
+    let relative_end = [
+        target.root[0] - attacker.board[0],
+        target.root[1] - attacker.board[1],
+        target.root[2] - attacker.board[2],
+    ];
+    let relative_delta =
+        std::array::from_fn::<_, 3, _>(|axis| relative_end[axis] - relative_start[axis]);
+    // The rider proxy is a vertical column. Find closest horizontal approach
+    // first, then check the vertical span at that same point in time.
+    let denominator = relative_delta[0] * relative_delta[0] + relative_delta[2] * relative_delta[2];
+    let closest_time = if denominator > 1.0e-8 {
+        (-(relative_start[0] * relative_delta[0] + relative_start[2] * relative_delta[2])
+            / denominator)
+            .clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let contact = std::array::from_fn::<_, 3, _>(|axis| {
+        relative_start[axis] + relative_delta[axis] * closest_time
+    });
+    let horizontal_distance_squared = contact[0] * contact[0] + contact[2] * contact[2];
+    if horizontal_distance_squared > 0.36 || contact[1] < -0.25 || contact[1] > 1.55 {
+        return None;
+    }
+
+    let relative_velocity = [
+        attacker.velocity[0] - target.velocity[0],
+        attacker.velocity[2] - target.velocity[2],
+    ];
+    let relative_speed = (relative_velocity[0] * relative_velocity[0]
+        + relative_velocity[1] * relative_velocity[1])
+        .sqrt();
+    if !relative_speed.is_finite() || relative_speed < 5.5 {
+        return None;
+    }
+
+    let direction = if horizontal_distance_squared > 1.0e-4 {
+        let length = horizontal_distance_squared.sqrt();
+        [contact[0] / length, contact[2] / length]
+    } else {
+        [
+            relative_velocity[0] / relative_speed,
+            relative_velocity[1] / relative_speed,
+        ]
+    };
+    let magnitude = (2.5 + relative_speed * 0.35).min(8.0);
+    Some([
+        direction[0] * magnitude,
+        (1.8 + relative_speed * 0.08).min(3.0),
+        direction[1] * magnitude,
+    ])
+}
+
 struct SkatePlayerLeave;
 
 impl EventHandler<pumpkin_plugin_api::events::player::PlayerLeaveEvent> for SkatePlayerLeave {
@@ -979,6 +1062,7 @@ fn tick_pending_skate_load(server: &Server, name: &str, global_budget: &mut usiz
     state.controls.insert(name.to_owned(), Controls::default());
     state.control_updated_at.insert(name.to_owned(), now);
     state.sessions.insert(name.to_owned(), session);
+    state.collision_poses.insert(name.to_owned(), pose.clone());
     state.engine_accumulator.insert(name.to_owned(), 0.0);
     state.engine_updated_at.insert(name.to_owned(), now);
     state.last_broadcast_at.insert(name.to_owned(), now);
@@ -1035,6 +1119,18 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             let mut remaining = *accumulated;
             let current_map_backed = state.map_backed.contains(name);
             let current_map = state.map_filenames.get(name);
+            // Client movement events and engine ticks can arrive at different
+            // cadences. Use the authoritative Skate pose for broad-phase
+            // proximity instead of the last Minecraft movement packet.
+            let query_center = state
+                .sessions
+                .get(name)
+                .map(|session| session.pose().root)
+                .unwrap_or([
+                    player_position.0 as f32,
+                    player_position.1 as f32,
+                    player_position.2 as f32,
+                ]);
             let mut nearby_players = Vec::new();
             for (other_name, other_session) in &state.sessions {
                 if other_name == name
@@ -1044,10 +1140,13 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                     continue;
                 }
                 let other_pose = other_session.pose();
-                let dx = other_pose.root[0] - player_position.0 as f32;
-                let dy = other_pose.root[1] - player_position.1 as f32;
-                let dz = other_pose.root[2] - player_position.2 as f32;
-                if dx * dx + dy * dy + dz * dz > 9.0 {
+                let dx = other_pose.root[0] - query_center[0];
+                let dy = other_pose.root[1] - query_center[1];
+                let dz = other_pose.root[2] - query_center[2];
+                // Keep the path length of a fast board inside the query even
+                // when the rider has crossed past this player since the last
+                // server update. The candidate list remains bounded below.
+                if dx * dx + dy * dy + dz * dz > 36.0 {
                     continue;
                 }
                 let Some(other_player) = server.get_player_by_name(other_name) else {
@@ -1064,6 +1163,20 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                     .then_with(|| left.0.cmp(&right.0))
             });
             nearby_players.truncate(16);
+            let previous_pose = state.collision_poses.get(name).cloned();
+            let previous_nearby_poses = nearby_players
+                .iter()
+                .map(|(other_name, other_pose, _)| {
+                    (
+                        other_name.clone(),
+                        state
+                            .collision_poses
+                            .get(other_name)
+                            .cloned()
+                            .unwrap_or_else(|| other_pose.clone()),
+                    )
+                })
+                .collect::<HashMap<_, _>>();
             let Some(session) = state.sessions.get_mut(name) else {
                 return;
             };
@@ -1089,6 +1202,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 remaining -= period;
                 steps += 1;
             }
+            let previous_pose = previous_pose.unwrap_or_else(|| pose.clone());
             if steps == 6 {
                 remaining = remaining.min(period);
             }
@@ -1108,7 +1222,15 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             }
             let acknowledged_sequence = state.acknowledge_control_step(name, steps, now);
             for (other_name, other_pose, _) in &nearby_players {
-                let Some(velocity) = player_collision_impact(&pose, other_pose) else {
+                let previous_other_pose =
+                    previous_nearby_poses.get(other_name).unwrap_or(other_pose);
+                let Some(velocity) = swept_player_collision_impact(
+                    &previous_pose,
+                    &pose,
+                    previous_other_pose,
+                    other_pose,
+                )
+                .or_else(|| player_collision_impact(&pose, other_pose)) else {
                     continue;
                 };
                 let pair = if name < other_name.as_str() {
@@ -1121,12 +1243,18 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 }) {
                     continue;
                 }
-                if let Some(target) = state.sessions.get_mut(other_name)
-                    && target.knock_down(velocity)
-                {
+                let knocked_pose = state
+                    .sessions
+                    .get_mut(other_name)
+                    .and_then(|target| target.knock_down(velocity).then(|| target.pose()));
+                if let Some(knocked_pose) = knocked_pose {
                     state.collision_impacts.insert(pair, now);
+                    state
+                        .collision_poses
+                        .insert(other_name.clone(), knocked_pose);
                 }
             }
+            state.collision_poses.insert(name.to_owned(), pose.clone());
             state.engine_accumulator.insert(name.to_owned(), remaining);
             let center = state.collision_center.get(name).copied().unwrap_or((
                 pose.root[0],
@@ -1485,7 +1613,8 @@ mod integration_tests {
         append_map_identity, append_visual, clear_skate_state, collision::CollisionScan,
         collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
         physics::Controls, player_collision_impact, sequence_is_newer, should_refresh_collision,
-        shove_impact, shove_pressed_edge, supports_client_protocol, take_collision_budget,
+        shove_impact, shove_pressed_edge, supports_client_protocol, swept_player_collision_impact,
+        take_collision_budget,
     };
     use engine::SkatePose;
     use std::time::{Duration, Instant};
@@ -1520,6 +1649,43 @@ mod integration_tests {
         );
         assert!(player_collision_impact(&attacker, &pose([1.0, 0.0, 0.0], [0.0; 3])).is_none());
         assert!(player_collision_impact(&attacker, &pose([0.5, 2.0, 0.0], [0.0; 3])).is_none());
+    }
+
+    #[test]
+    fn swept_board_impact_detects_a_fast_crossing_between_samples() {
+        let attacker_previous = pose([-1.0, 0.0, 0.0], [24.0, 0.0, 0.0]);
+        let attacker_current = pose([1.0, 0.0, 0.0], [24.0, 0.0, 0.0]);
+        let target = pose([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+
+        assert!(player_collision_impact(&attacker_current, &target).is_none());
+        let impulse =
+            swept_player_collision_impact(&attacker_previous, &attacker_current, &target, &target)
+                .unwrap();
+        assert!(impulse[0] > 0.0);
+        assert!(impulse[1] >= 1.8);
+    }
+
+    #[test]
+    fn swept_board_impact_rejects_vertical_misses_and_nonfinite_history() {
+        let attacker_previous = pose([-1.0, 0.0, 0.0], [24.0, 0.0, 0.0]);
+        let attacker_current = pose([1.0, 0.0, 0.0], [24.0, 0.0, 0.0]);
+        let target_above = pose([0.0, 2.0, 0.0], [0.0; 3]);
+        assert!(
+            swept_player_collision_impact(
+                &attacker_previous,
+                &attacker_current,
+                &target_above,
+                &target_above,
+            )
+            .is_none()
+        );
+
+        let mut invalid = attacker_previous.clone();
+        invalid.board[0] = f32::NAN;
+        let target = pose([0.0, 0.0, 0.0], [0.0; 3]);
+        assert!(
+            swept_player_collision_impact(&invalid, &attacker_current, &target, &target,).is_none()
+        );
     }
 
     #[test]
@@ -1795,6 +1961,9 @@ mod integration_tests {
         state
             .collision_scans
             .insert("rider".into(), CollisionScan::new((0.0, 64.0, 0.0)));
+        state
+            .collision_poses
+            .insert("rider".into(), pose([0.0, 64.0, 0.0], [0.0; 3]));
 
         assert!(clear_skate_state(&mut state, "rider"));
         assert!(!clear_skate_state(&mut state, "rider"));
@@ -1811,6 +1980,7 @@ mod integration_tests {
         assert!(!state.last_broadcast_at.contains_key("rider"));
         assert!(!state.collision_center.contains_key("rider"));
         assert!(!state.collision_scans.contains_key("rider"));
+        assert!(!state.collision_poses.contains_key("rider"));
     }
 
     #[test]
