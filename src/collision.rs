@@ -27,12 +27,19 @@ pub fn around_player(world: &World, position: (f64, f64, f64)) -> Result<LocalCo
     let min_y = origin.1 - VERTICAL_BELOW;
     let max_y = origin.1 + VERTICAL_ABOVE;
 
-    let mut states = HashMap::new();
+    let mut grindable_states = HashMap::new();
+    let mut block_state_cache = HashMap::new();
     let mut triangles = Vec::new();
     for y in min_y..=max_y {
         for x in min_x..=max_x {
             for z in min_z..=max_z {
-                let state = world.get_block_state(BlockPos { x, y, z });
+                let position = BlockPos { x, y, z };
+                let state_id = world.get_block_state_id(position);
+                let Some(state) = cached_lookup(&mut block_state_cache, state_id, || {
+                    BlockState::from_id(state_id)
+                }) else {
+                    continue;
+                };
                 if state.is_air || state.is_liquid || state.collision_shapes.is_empty() {
                     continue;
                 }
@@ -62,15 +69,23 @@ pub fn around_player(world: &World, position: (f64, f64, f64)) -> Result<LocalCo
                 }
                 if grindable(&state) {
                     if let Some(height) = grind_height {
-                        states.insert((x, y, z), (state.block_name, height));
+                        grindable_states.insert((x, y, z), (state.block_name.clone(), height));
                     }
                 }
             }
         }
     }
 
-    let rails = rails_from_states(&states);
+    let rails = rails_from_states(&grindable_states);
     Ok(LocalCollision { triangles, rails })
+}
+
+fn cached_lookup<T>(
+    cache: &mut HashMap<u16, Option<T>>,
+    state_id: u16,
+    lookup: impl FnOnce() -> Option<T>,
+) -> Option<&T> {
+    cache.entry(state_id).or_insert_with(lookup).as_ref()
 }
 
 fn grindable(state: &BlockState) -> bool {
@@ -127,7 +142,8 @@ fn add_box(out: &mut Vec<[[f32; 3]; 3]>, min: [f32; 3], max: [f32; 3]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_box, rails_from_states};
+    use super::{add_box, cached_lookup, rails_from_states};
+    use std::cell::Cell;
     use std::collections::HashMap;
 
     #[test]
@@ -157,5 +173,35 @@ mod tests {
         assert_eq!(rails.len(), 2);
         assert!(rails.iter().all(|rail| rail.len() == 2));
         assert!(rails.iter().flatten().all(|point| point[1] == 2.5));
+    }
+
+    #[test]
+    fn detailed_block_state_lookup_is_cached_by_state_id() {
+        let mut cache = HashMap::new();
+        let calls = Cell::new(0);
+        for _ in 0..3 {
+            let state = cached_lookup(&mut cache, 42, || {
+                calls.set(calls.get() + 1);
+                Some("minecraft:stone")
+            });
+            assert_eq!(state, Some(&"minecraft:stone"));
+        }
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn missing_block_state_id_is_cached_as_well() {
+        let mut cache = HashMap::new();
+        let calls = Cell::new(0);
+        for _ in 0..3 {
+            assert_eq!(
+                cached_lookup(&mut cache, 65_535, || {
+                    calls.set(calls.get() + 1);
+                    None::<()>
+                }),
+                None
+            );
+        }
+        assert_eq!(calls.get(), 1);
     }
 }
