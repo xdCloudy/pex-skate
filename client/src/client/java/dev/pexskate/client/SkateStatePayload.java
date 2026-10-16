@@ -25,7 +25,9 @@ public record SkateStatePayload(
         float cameraUpX, float cameraUpY, float cameraUpZ,
         float cameraFov,
         boolean mapBacked,
-        String mapFilename
+        String mapFilename,
+        String mapSha256,
+        String propsSha256
 ) implements CustomPacketPayload {
     public static final Type<SkateStatePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath("pexskate", "state"));
     public static final StreamCodec<RegistryFriendlyByteBuf, SkateStatePayload> CODEC = StreamCodec.of(
@@ -69,10 +71,14 @@ public record SkateStatePayload(
                     buffer.writeShort(mapFilename.length);
                     buffer.writeBytes(mapFilename);
                 }
+                if (payload.version() >= 8) {
+                    writeDigest(buffer, payload.mapSha256());
+                    writeDigest(buffer, payload.propsSha256());
+                }
             },
             buffer -> {
                 byte version = buffer.readByte();
-                if (version != 4 && version != 5 && version != 6 && version != 7) {
+                if (version != 4 && version != 5 && version != 6 && version != 7 && version != 8) {
                     throw new IllegalArgumentException("Unsupported PEX Skate state version " + version);
                 }
                 boolean active = buffer.readBoolean();
@@ -105,6 +111,8 @@ public record SkateStatePayload(
                     buffer.readBytes(mapFilenameBytes);
                     mapFilename = new String(mapFilenameBytes, java.nio.charset.StandardCharsets.UTF_8);
                 }
+                String mapSha256 = version >= 8 ? readDigest(buffer) : "";
+                String propsSha256 = version >= 8 ? readDigest(buffer) : "";
                 return new SkateStatePayload(version, active, entityId,
                         values[0], values[1], values[2], values[3], values[4], values[5],
                         values[6], values[7], values[8], values[9],
@@ -113,7 +121,8 @@ public record SkateStatePayload(
                         flags, new String(trick, java.nio.charset.StandardCharsets.UTF_8),
                         hipsX, hipsY, hipsZ, boneMask, offsets, rotations,
                         camera[0], camera[1], camera[2], camera[3], camera[4], camera[5],
-                        camera[6], camera[7], camera[8], camera[9], mapBacked, mapFilename);
+                        camera[6], camera[7], camera[8], camera[9], mapBacked, mapFilename,
+                        mapSha256, propsSha256);
             }
     );
 
@@ -121,6 +130,21 @@ public record SkateStatePayload(
         short[] rotations = new short[36 * 4];
         for (int i = 0; i < 36; i++) rotations[i * 4 + 3] = Short.MAX_VALUE;
         return rotations;
+    }
+
+    private static void writeDigest(RegistryFriendlyByteBuf buffer, String digest) {
+        byte[] bytes = digest == null || digest.isBlank()
+                ? new byte[32] : java.util.HexFormat.of().parseHex(digest);
+        if (bytes.length != 32) throw new IllegalArgumentException("PEX Skate digest must be SHA-256");
+        buffer.writeBytes(bytes);
+    }
+
+    private static String readDigest(RegistryFriendlyByteBuf buffer) {
+        byte[] bytes = new byte[32];
+        buffer.readBytes(bytes);
+        boolean empty = true;
+        for (byte value : bytes) empty &= value == 0;
+        return empty ? "" : java.util.HexFormat.of().formatHex(bytes);
     }
 
     @Override

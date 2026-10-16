@@ -34,7 +34,7 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
-const CLIENT_PROTOCOL_VERSION: u8 = 3;
+const CLIENT_PROTOCOL_VERSION: u8 = 4;
 const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 
 fn server_state() -> &'static Mutex<ServerState> {
@@ -54,6 +54,7 @@ struct ServerState {
     sessions: HashMap<String, SkateSession>,
     map_backed: HashSet<String>,
     map_filenames: HashMap<String, String>,
+    map_digests: HashMap<String, MapDigests>,
     pending_loads: HashSet<String>,
     pending_initial_scans: HashMap<String, PendingSkateLoad>,
     engine_accumulator: HashMap<String, f32>,
@@ -63,6 +64,12 @@ struct ServerState {
     collision_scans: HashMap<String, CollisionScan>,
     collision_scan_cursor: Option<String>,
     collision_impacts: HashMap<(String, String), Instant>,
+}
+
+#[derive(Clone, Debug)]
+struct MapDigests {
+    map: String,
+    props: String,
 }
 
 struct PendingSkateLoad {
@@ -226,6 +233,17 @@ impl CommandHandler for ToggleSkate {
             };
             match default_skate_map_path(data_root) {
                 Ok(Some(map_path)) => {
+                    let map_digests = match load_map_digests(data_root, &map_path) {
+                        Ok(digests) => digests,
+                        Err(error) => {
+                            clear_pending_load(&name);
+                            sender.send_message(TextComponent::text(&format!(
+                                "Could not verify Skate map {}: {error}",
+                                map_path.file_name().unwrap_or_default().to_string_lossy()
+                            )));
+                            return Ok(0);
+                        }
+                    };
                     let session = match SkateSession::load_skate_map(data_root, &map_path) {
                         Ok(session) => session,
                         Err(error) => {
@@ -266,6 +284,7 @@ impl CommandHandler for ToggleSkate {
                     state
                         .map_filenames
                         .insert(name.clone(), map_filename.clone());
+                    state.map_digests.insert(name.clone(), map_digests.clone());
                     state.controls.insert(name.clone(), Controls::default());
                     state.control_updated_at.insert(name.clone(), now);
                     state.sessions.insert(name.clone(), session);
@@ -290,6 +309,7 @@ impl CommandHandler for ToggleSkate {
                         true,
                         true,
                         Some(&map_filename),
+                        Some(&map_digests),
                     );
                     sender.send_message(TextComponent::text(&format!(
                         "Skate 3 Engine mode enabled on {}.",
@@ -342,6 +362,7 @@ fn clear_skate_state(state: &mut ServerState, name: &str) -> bool {
     state.sessions.remove(name);
     state.map_backed.remove(name);
     state.map_filenames.remove(name);
+    state.map_digests.remove(name);
     state.pending_loads.remove(name);
     state.pending_initial_scans.remove(name);
     state.engine_accumulator.remove(name);
@@ -360,6 +381,32 @@ fn clear_pending_load(name: &str) {
         state.pending_loads.remove(name);
         state.pending_initial_scans.remove(name);
     }
+}
+
+fn load_map_digests(data_root: &Path, map_path: &Path) -> Result<MapDigests, String> {
+    let map_bytes = std::fs::read(map_path)
+        .map_err(|error| format!("could not read {}: {error}", map_path.display()))?;
+    let map = skate_data::sha256_digest(&map_bytes);
+    let stem = map_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| {
+            !value.is_empty()
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
+        .ok_or_else(|| "Skate map filename is invalid".to_owned())?;
+    let props_path = data_root
+        .join("private")
+        .join("native-props")
+        .join(format!("{stem}.skate"));
+    let props = match std::fs::read(&props_path) {
+        Ok(bytes) => skate_data::sha256_digest(&bytes),
+        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("could not read {}: {error}", props_path.display())),
+    };
+    Ok(MapDigests { map, props })
 }
 
 /// Select a converted map deterministically. An optional settings/default-map.txt
@@ -913,6 +960,7 @@ fn tick_pending_skate_load(server: &Server, name: &str, global_budget: &mut usiz
         true,
         false,
         None,
+        None,
     );
     player.send_system_message(TextComponent::text("Skate 3 Engine mode enabled."), true);
 }
@@ -924,7 +972,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
     let now = Instant::now();
     let world_id = player.as_entity().get_world().get_id();
     let player_position = player.get_position();
-    let (pose, should_refresh_collision, should_broadcast, map_backed, map_filename) =
+    let (pose, should_refresh_collision, should_broadcast, map_backed, map_filename, map_digests) =
         {
             let Ok(mut state) = server_state().lock() else {
                 return;
@@ -1044,6 +1092,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             ));
             let map_backed = state.map_backed.contains(name);
             let map_filename = state.map_filenames.get(name).cloned();
+            let map_digests = state.map_digests.get(name).cloned();
             let should_refresh_collision = should_refresh_collision(map_backed, center, pose.root);
             let should_broadcast = state.last_broadcast_at.get(name).is_none_or(|last| {
                 now.saturating_duration_since(*last) >= STATE_BROADCAST_INTERVAL
@@ -1060,6 +1109,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 should_broadcast,
                 map_backed,
                 map_filename,
+                map_digests,
             )
         };
 
@@ -1100,6 +1150,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             true,
             map_backed,
             map_filename.as_deref(),
+            map_digests.as_ref(),
         );
     }
 }
@@ -1212,9 +1263,10 @@ fn broadcast_pose(
     active: bool,
     map_backed: bool,
     map_filename: Option<&str>,
+    map_digests: Option<&MapDigests>,
 ) {
     let mut payload = Vec::with_capacity(1100);
-    payload.push(7); // version
+    payload.push(8); // version
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in pose.root {
@@ -1244,11 +1296,16 @@ fn broadcast_pose(
     payload.extend_from_slice(&(trick_name.len() as u16).to_be_bytes());
     payload.extend_from_slice(trick_name);
     append_visual(&mut payload, pose.visual.as_ref(), pose.root);
-    append_map_identity(&mut payload, map_backed, map_filename);
+    append_map_identity(&mut payload, map_backed, map_filename, map_digests);
     broadcast_payload(server, &payload);
 }
 
-fn append_map_identity(payload: &mut Vec<u8>, map_backed: bool, map_filename: Option<&str>) {
+fn append_map_identity(
+    payload: &mut Vec<u8>,
+    map_backed: bool,
+    map_filename: Option<&str>,
+    map_digests: Option<&MapDigests>,
+) {
     payload.push(u8::from(map_backed));
     let map_filename = if map_backed {
         map_filename.unwrap_or_default().as_bytes()
@@ -1258,6 +1315,22 @@ fn append_map_identity(payload: &mut Vec<u8>, map_backed: bool, map_filename: Op
     let map_filename_len = map_filename.len().min(u16::MAX as usize);
     payload.extend_from_slice(&(map_filename_len as u16).to_be_bytes());
     payload.extend_from_slice(&map_filename[..map_filename_len]);
+    for digest in map_digests
+        .map(|digests| [digests.map.as_str(), digests.props.as_str()])
+        .unwrap_or(["", ""])
+    {
+        let decoded = (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .then(|| {
+                (0..32)
+                    .map(|index| u8::from_str_radix(&digest[index * 2..index * 2 + 2], 16).ok())
+                    .collect::<Option<Vec<_>>>()
+            });
+        if let Some(Some(bytes)) = decoded {
+            payload.extend_from_slice(&bytes);
+        } else {
+            payload.resize(payload.len() + 32, 0);
+        }
+    }
 }
 
 fn append_visual(
@@ -1311,7 +1384,7 @@ fn broadcast_state(
     active: bool,
 ) {
     let mut payload = Vec::with_capacity(84);
-    payload.push(7);
+    payload.push(8);
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in [position.0 as f32, position.1 as f32, position.2 as f32] {
@@ -1341,7 +1414,7 @@ fn broadcast_state(
     payload.resize(payload.len() + 36 * 3 * 2, 0);
     payload.resize(payload.len() + 10 * 4, 0);
     payload.resize(payload.len() + 36 * 4 * 2, 0);
-    append_map_identity(&mut payload, false, None);
+    append_map_identity(&mut payload, false, None, None);
 
     broadcast_payload(server, &payload);
 }
@@ -1582,13 +1655,33 @@ mod integration_tests {
     #[test]
     fn authored_map_identity_carries_the_selected_filename() {
         let mut payload = Vec::new();
-        append_map_identity(&mut payload, true, Some("University.skate"));
+        append_map_identity(&mut payload, true, Some("University.skate"), None);
         assert_eq!(&payload[..3], &[1, 0, 16]);
-        assert_eq!(&payload[3..], b"University.skate");
+        assert_eq!(&payload[3..19], b"University.skate");
+        assert_eq!(payload.len(), 83);
 
         payload.clear();
-        append_map_identity(&mut payload, false, Some("ignored.skate"));
-        assert_eq!(payload, [0, 0, 0]);
+        append_map_identity(&mut payload, false, Some("ignored.skate"), None);
+        assert_eq!(payload.len(), 67);
+        assert_eq!(&payload[..3], &[0, 0, 0]);
+        assert!(payload[3..].iter().all(|byte| *byte == 0));
+
+        payload.clear();
+        let digests = super::MapDigests {
+            map: "ab".repeat(32),
+            props: "cd".repeat(32),
+        };
+        append_map_identity(&mut payload, true, Some("University.skate"), Some(&digests));
+        assert_eq!(&payload[19..51], &[0xab; 32]);
+        assert_eq!(&payload[51..83], &[0xcd; 32]);
+    }
+
+    #[test]
+    fn skate_data_sha256_matches_the_standard_digest_vector() {
+        assert_eq!(
+            skate_data::sha256_digest(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]

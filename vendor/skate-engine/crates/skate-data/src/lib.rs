@@ -6,15 +6,20 @@ pub mod abin;
 pub mod animation_banks;
 pub mod animation_frames;
 pub mod animation_metadata;
-pub mod collections;
-pub mod scoring;
-mod scoring_fields;
 pub mod attrib_hash;
+pub mod collections;
+pub mod gesture_patterns;
 pub mod input_config;
 pub mod input_recording;
-pub mod gesture_patterns;
 pub mod physics_skeleton;
+pub mod scoring;
+mod scoring_fields;
 mod sha256;
-pub mod state_graph;
-pub mod skate_map;
+
+/// SHA-256 digest for exchanging identity of locally installed game data.
+pub fn sha256_digest(bytes: &[u8]) -> String {
+    sha256::digest(bytes)
+}
 pub mod retail_collision;
+pub mod skate_map;
+pub mod state_graph;

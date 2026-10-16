@@ -67,9 +67,17 @@ public final class SkateMapModel {
     }
 
     static boolean isReadyFor(String filename) {
+        return isReadyFor(filename, "", "");
+    }
+
+    static boolean isReadyFor(String filename, String mapSha256, String propsSha256) {
         Model current = model;
         return current != null && (filename == null || filename.isBlank()
-                || current.filename.equalsIgnoreCase(filename));
+                || current.filename.equalsIgnoreCase(filename))
+                && (mapSha256 == null || mapSha256.isBlank() || current.mapSha256.equalsIgnoreCase(mapSha256))
+                && (propsSha256 == null || (mapSha256 == null || mapSha256.isBlank()
+                        ? propsSha256.isBlank() || current.propsSha256.equalsIgnoreCase(propsSha256)
+                        : current.propsSha256.equalsIgnoreCase(propsSha256)));
     }
 
     static boolean isLoadingFor(String filename) {
@@ -77,9 +85,15 @@ public final class SkateMapModel {
     }
 
     static void loadMap(String requestedFilename) {
+        loadMap(requestedFilename, "", "");
+    }
+
+    static void loadMap(String requestedFilename, String expectedMapSha256, String expectedPropsSha256) {
         String request = requestedFilename == null || requestedFilename.isBlank() ? null : requestedFilename;
-        if (isReadyFor(request)) return;
-        String attemptKey = request == null ? "" : request.toLowerCase(Locale.ROOT);
+        final String requiredMapSha256 = expectedMapSha256 == null ? "" : expectedMapSha256;
+        final String requiredPropsSha256 = expectedPropsSha256 == null ? "" : expectedPropsSha256;
+        if (isReadyFor(request, requiredMapSha256, requiredPropsSha256)) return;
+        String attemptKey = (request == null ? "" : request.toLowerCase(Locale.ROOT)) + ":" + requiredMapSha256 + ":" + requiredPropsSha256;
         if (Objects.equals(attemptedFilename, attemptKey)) return;
         attemptedFilename = attemptKey;
         long generation = ++loadGeneration;
@@ -108,21 +122,31 @@ public final class SkateMapModel {
                 try {
                     byte[] file = Files.readAllBytes(selected);
                     verifyCatalog(root, filename, file);
+                    String actualMapSha256 = sha256(file);
+                    if (!requiredMapSha256.isBlank() && !actualMapSha256.equalsIgnoreCase(requiredMapSha256)) {
+                        throw new IOException("server and client converted Skate map checksums differ for " + filename);
+                    }
                     ParsedModel district = parse(file, filename);
                     Path propsPath = root.resolve("props").resolve(filename);
-                    if (Files.isRegularFile(propsPath)) {
+                    if (!requiredPropsSha256.isBlank()) {
                         try {
+                            if (!Files.isRegularFile(propsPath)) throw new IOException("server requires authored props, but this client has no " + propsPath);
                             long propsLimit = Math.min(MAX_MAP_BYTES, Runtime.getRuntime().maxMemory() / 2);
                             if (Files.size(propsPath) > propsLimit) {
                                 throw new IOException("authored district prop package exceeds this client's size limit");
                             }
                             byte[] propsFile = Files.readAllBytes(propsPath);
+                            if (!sha256(propsFile).equalsIgnoreCase(requiredPropsSha256)) {
+                                throw new IOException("server and client converted Skate prop checksums differ for " + filename);
+                            }
                             verifyPropsCatalog(root, filename, propsFile);
                             ParsedModel props = parse(propsFile, filename + "-props");
                             district = mergeProps(district, props);
                         } catch (IOException | RuntimeException error) {
-                            LOGGER.warn("Could not load authored district props from {}; keeping the district geometry", propsPath, error);
+                            throw new CompletionException(error);
                         }
+                    } else if (Files.isRegularFile(propsPath)) {
+                        LOGGER.info("Skipping local authored props because the server map has no prop package for {}", filename);
                     }
                     return district;
                 } catch (IOException error) {
@@ -193,6 +217,14 @@ public final class SkateMapModel {
             if (!actualDigest.equalsIgnoreCase(expectedDigest)) {
                 throw new IOException("converted Skate map checksum does not match maps.json for " + filename);
             }
+        } catch (NoSuchAlgorithmException error) {
+            throw new IOException("SHA-256 is unavailable on this Java runtime", error);
+        }
+    }
+
+    private static String sha256(byte[] file) throws IOException {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(file));
         } catch (NoSuchAlgorithmException error) {
             throw new IOException("SHA-256 is unavailable on this Java runtime", error);
         }
@@ -270,8 +302,8 @@ public final class SkateMapModel {
                     primitive.vertexIndirectLight, primitive.indices, primitive.bounds, texture, primitive.color,
                     primitive.alphaMode));
         }
-        return new ParsedModel(district.filename, district.mapName, List.copyOf(textures),
-                List.copyOf(primitives), district.sky, memoryEstimate);
+        return new ParsedModel(district.filename, district.mapName, district.mapSha256, props.mapSha256,
+                List.copyOf(textures), List.copyOf(primitives), district.sky, memoryEstimate);
     }
 
     private static Path selectMapByFilename(String filename, Path maps) throws IOException {
@@ -360,7 +392,8 @@ public final class SkateMapModel {
             }
             PendingSky pendingSky = task.parsed.sky;
             Sky sky = pendingSky == null ? null : new Sky(pendingSky, task.textureIds[pendingSky.diffuseTextureIndex]);
-            model = new Model(task.parsed.filename, List.copyOf(primitives), sky);
+            model = new Model(task.parsed.filename, task.parsed.mapSha256, task.parsed.propsSha256,
+                    List.copyOf(primitives), sky);
             uploadTask = null;
             loadingFilename = null;
             LOGGER.info("Loaded Skate district {} with {} material groups",
@@ -425,6 +458,7 @@ public final class SkateMapModel {
     }
 
     private static ParsedModel parse(byte[] file, String filename) throws IOException {
+        String mapSha256 = sha256(file);
         Reader reader = new Reader(file);
         byte[] magic = reader.take(8);
         if (magic[0] != 'S' || magic[1] != 'K' || magic[2] != 'A' || magic[3] != 'T' || magic[4] != 'E'
@@ -606,7 +640,7 @@ public final class SkateMapModel {
         }
         long parsedMemoryEstimate = geometryMemoryEstimate + (texturePixels + (sky == null ? 0 : sky.texturePixels)) * 4L;
         if (sky != null) parsedMemoryEstimate += sky.positions.length * 4L + sky.indices.length * 4L;
-        return new ParsedModel(filename, mapName, List.copyOf(textures), List.copyOf(primitives), sky, parsedMemoryEstimate);
+        return new ParsedModel(filename, mapName, mapSha256, "", List.copyOf(textures), List.copyOf(primitives), sky, parsedMemoryEstimate);
     }
 
     private static void skipRails(Reader reader, long count) throws IOException {
@@ -799,10 +833,11 @@ public final class SkateMapModel {
         return (int) value;
     }
 
-    private record Model(String filename, List<Primitive> primitives, Sky sky) {}
+    private record Model(String filename, String mapSha256, String propsSha256, List<Primitive> primitives, Sky sky) {}
     public record FogSettings(float near, float far, float power, float maximum,
                               float red, float green, float blue) {}
-    private record ParsedModel(String filename, String mapName, List<TextureData> textures,
+    private record ParsedModel(String filename, String mapName, String mapSha256, String propsSha256,
+                               List<TextureData> textures,
                                List<PendingPrimitive> primitives, PendingSky sky, long memoryEstimate) {}
     private record PendingSky(float[] positions, float[] uv, int[] indices,
                               float fogNear, float fogFar, float fogPower, float fogMaximum,
