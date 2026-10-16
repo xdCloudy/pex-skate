@@ -1,5 +1,9 @@
 package dev.pexskate.client;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -22,10 +26,13 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -98,7 +105,9 @@ final class SkateMapModel {
             loadingFilename = filename;
             CompletableFuture.supplyAsync(() -> {
                 try {
-                    return parse(Files.readAllBytes(selected), filename);
+                    byte[] file = Files.readAllBytes(selected);
+                    verifyCatalog(root, filename, file);
+                    return parse(file, filename);
                 } catch (IOException error) {
                     throw new CompletionException(error);
                 }
@@ -123,6 +132,52 @@ final class SkateMapModel {
             releaseModel();
             loadingFilename = null;
             LOGGER.error("Could not load the converted Skate district from {}", maps, error);
+        }
+    }
+
+    private static void verifyCatalog(Path root, String filename, byte[] file) throws IOException {
+        Path catalogPath = root.resolve("maps.json");
+        if (!Files.isRegularFile(catalogPath)) {
+            // Older/manual installations may only have the .skate files. New
+            // setup-helper installs include the catalog and get integrity checks.
+            LOGGER.info("No converted Skate map catalog at {}; skipping district checksum validation", catalogPath);
+            return;
+        }
+        JsonElement document;
+        try (var reader = Files.newBufferedReader(catalogPath, StandardCharsets.UTF_8)) {
+            document = JsonParser.parseReader(reader);
+        } catch (RuntimeException error) {
+            throw new IOException("converted Skate map catalog is not valid JSON", error);
+        }
+        if (document == null || !document.isJsonArray()) {
+            throw new IOException("converted Skate map catalog must be a JSON array");
+        }
+        String expectedPath = "maps/" + filename;
+        String expectedDigest = null;
+        JsonArray entries = document.getAsJsonArray();
+        for (JsonElement item : entries) {
+            if (!item.isJsonObject()) continue;
+            JsonObject entry = item.getAsJsonObject();
+            if (!entry.has("path") || !entry.get("path").isJsonPrimitive()
+                    || !expectedPath.equals(entry.get("path").getAsString())) continue;
+            if (expectedDigest != null) {
+                throw new IOException("converted Skate map catalog contains duplicate entries for " + filename);
+            }
+            if (!entry.has("sha256") || !entry.get("sha256").isJsonPrimitive()) {
+                throw new IOException("converted Skate map catalog has no SHA-256 for " + filename);
+            }
+            expectedDigest = entry.get("sha256").getAsString();
+        }
+        if (expectedDigest == null || !expectedDigest.matches("(?i)[0-9a-f]{64}")) {
+            throw new IOException("converted Skate map catalog has no valid SHA-256 entry for " + filename);
+        }
+        try {
+            String actualDigest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(file));
+            if (!actualDigest.equalsIgnoreCase(expectedDigest)) {
+                throw new IOException("converted Skate map checksum does not match maps.json for " + filename);
+            }
+        } catch (NoSuchAlgorithmException error) {
+            throw new IOException("SHA-256 is unavailable on this Java runtime", error);
         }
     }
 

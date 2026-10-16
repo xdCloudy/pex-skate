@@ -60,6 +60,11 @@ $clientMapsPath = if ($clientConfigPath) {
 } else {
     $null
 }
+$clientMapsManifestPath = if ($clientConfigPath) {
+    Join-Path $clientConfigPath "pex-skate\maps.json"
+} else {
+    $null
+}
 
 if ($dataPath -and ((Test-Path -LiteralPath $privatePath) -or (Test-Path -LiteralPath $mapsPath))) {
     $answer = [System.Windows.Forms.MessageBox]::Show(
@@ -212,25 +217,45 @@ try {
             $clientMapParent = Split-Path -Parent $clientMapsPath
             $temporaryMapsPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".tmp")
             $oldMapsPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".previous")
+            $temporaryManifestPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".json.tmp")
+            $oldManifestPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".json.previous")
             try {
                 New-Item -ItemType Directory -Force -Path $clientMapParent | Out-Null
                 $mapsSource = if ($dataPath) { $mapsPath } else { Join-Path $stagePath "maps" }
                 Copy-Item -LiteralPath $mapsSource -Destination $temporaryMapsPath -Recurse
+                $manifestSource = Join-Path (Split-Path -Parent $mapsSource) "maps.json"
+                Copy-Item -LiteralPath $manifestSource -Destination $temporaryManifestPath
                 if (Test-Path -LiteralPath $clientMapsPath) {
                     Move-Item -LiteralPath $clientMapsPath -Destination $oldMapsPath
                 }
-                Move-Item -LiteralPath $temporaryMapsPath -Destination $clientMapsPath
-                if (Test-Path -LiteralPath $oldMapsPath) {
-                    Remove-Item -LiteralPath $oldMapsPath -Recurse -Force
+                if (Test-Path -LiteralPath $clientMapsManifestPath) {
+                    Move-Item -LiteralPath $clientMapsManifestPath -Destination $oldManifestPath
                 }
-                $clientModelMessage += "`r`nClient map packages installed: $clientMapsPath"
+                Move-Item -LiteralPath $temporaryMapsPath -Destination $clientMapsPath
+                Move-Item -LiteralPath $temporaryManifestPath -Destination $clientMapsManifestPath
+                try {
+                    if (Test-Path -LiteralPath $oldMapsPath) {
+                        Remove-Item -LiteralPath $oldMapsPath -Recurse -Force
+                    }
+                    if (Test-Path -LiteralPath $oldManifestPath) {
+                        Remove-Item -LiteralPath $oldManifestPath -Force
+                    }
+                } catch {
+                    Write-Warning "Client maps were installed, but an old backup could not be removed: $($_.Exception.Message)"
+                }
+                $clientModelMessage += "`r`nClient map packages and integrity catalog installed: $clientMapsPath"
             } catch {
                 if (Test-Path -LiteralPath $clientMapsPath) { Remove-Item -LiteralPath $clientMapsPath -Recurse -Force }
                 if (Test-Path -LiteralPath $oldMapsPath) { Move-Item -LiteralPath $oldMapsPath -Destination $clientMapsPath }
+                if (Test-Path -LiteralPath $clientMapsManifestPath) { Remove-Item -LiteralPath $clientMapsManifestPath -Force }
+                if (Test-Path -LiteralPath $oldManifestPath) { Move-Item -LiteralPath $oldManifestPath -Destination $clientMapsManifestPath }
                 $clientModelMessage += "`r`nClient map copy failed: $($_.Exception.Message)"
             } finally {
                 if (Test-Path -LiteralPath $temporaryMapsPath) {
                     Remove-Item -LiteralPath $temporaryMapsPath -Recurse -Force
+                }
+                if (Test-Path -LiteralPath $temporaryManifestPath) {
+                    Remove-Item -LiteralPath $temporaryManifestPath -Force
                 }
             }
         } else {
