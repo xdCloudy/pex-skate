@@ -7,6 +7,16 @@ use the engine's portable `SKATE14` format and include render geometry, textures
 retail collision, authored grind splines, and the district's client-rendered
 retail sky dome when its source assets resolve.
 
+Resolved DMO placements also produce `assets/private/native-props/<Map>.skate`
+for client rendering and an `<Map>.instances` collision sidecar in the same
+directory. The `PEXCOL3` sidecar stores each
+instance ID, its authored transform, and its local opaque-mesh triangles; the
+server expands these into the initial collision layer. It preserves instance
+boundaries for a future movement protocol, but the current runtime does not
+simulate prop movement or impact response. `<Map>.collision` remains as a
+bounded compatibility/fallback package. `maps.json` records and hashes each
+available package.
+
 The ISO mode reads the required files and `data/content/worldDIST_*.big` map
 archives from the disc image into a temporary folder, converts them, then removes
 that temporary extraction. The XDVDFS
