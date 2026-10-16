@@ -45,7 +45,7 @@ jobs:
           test -n "$client_jar"
           cp "$client_jar" dist/pex-skate-client-26.3.jar
           cp release/INSTALL.md dist/INSTALL.md
-          sha256sum dist/pex-skate.wasm dist/pex-skate-client-26.3.jar > dist/SHA256SUMS
+          (cd dist && sha256sum pex-skate.wasm pex-skate-client-26.3.jar > SHA256SUMS)
           (cd dist && zip -j PEX-Skate-26.3.zip pex-skate.wasm pex-skate-client-26.3.jar SHA256SUMS INSTALL.md)
           (cd dist && sha256sum --check SHA256SUMS)
           test "$(unzip -Z1 dist/PEX-Skate-26.3.zip | sort | tr '\n' ' ')" = "INSTALL.md SHA256SUMS pex-skate-client-26.3.jar pex-skate.wasm "
