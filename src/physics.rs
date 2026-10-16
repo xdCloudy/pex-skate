@@ -12,6 +12,7 @@ pub struct Controls {
     pub push: bool,
     pub push_left: bool,
     pub brake: bool,
+    pub dismount: bool,
 }
 
 impl Controls {
@@ -34,6 +35,7 @@ impl Controls {
                 push: flags & 1 != 0,
                 push_left: false,
                 brake: flags & 2 != 0,
+                dismount: false,
             }),
             [2, flags, forward, steer, right_x, right_y] if flags & !0x07 == 0 => Some(Self {
                 forward: f32::from(*forward as i8) / 127.0,
@@ -45,6 +47,7 @@ impl Controls {
                 push: flags & 1 != 0,
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
+                dismount: false,
             }),
             [
                 3,
@@ -65,6 +68,7 @@ impl Controls {
                 push: flags & 1 != 0,
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
+                dismount: false,
             }),
             [
                 4,
@@ -85,6 +89,28 @@ impl Controls {
                 push: flags & 1 != 0,
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
+                dismount: false,
+            }),
+            [
+                5,
+                flags,
+                left_trigger,
+                right_trigger,
+                forward,
+                steer,
+                right_x,
+                right_y,
+            ] => Some(Self {
+                forward: f32::from(*forward as i8) / 127.0,
+                steer: f32::from(*steer as i8) / 127.0,
+                right_x: f32::from(*right_x as i8) / 127.0,
+                right_y: f32::from(*right_y as i8) / 127.0,
+                triggers: [*left_trigger, *right_trigger],
+                dpad: (flags >> 3) & 0x0f,
+                push: flags & 1 != 0,
+                push_left: flags & 2 != 0,
+                brake: flags & 4 != 0,
+                dismount: flags & 0x80 != 0,
             }),
             _ => None,
         }
@@ -140,5 +166,12 @@ mod tests {
         let controls = Controls::decode(&[4, 0b0101_0010, 64, 192, 0, 0, 0, 0]).unwrap();
         assert_eq!(controls.dpad, 0b1010);
         assert_eq!(controls.triggers, [64, 192]);
+    }
+
+    #[test]
+    fn decodes_v5_dismount_toggle_and_dpad_with_reserved_flags_clear() {
+        let controls = Controls::decode(&[5, 0b1000_1010, 0, 0, 0, 0, 0, 0]).unwrap();
+        assert!(controls.dismount);
+        assert_eq!(controls.dpad, 1);
     }
 }

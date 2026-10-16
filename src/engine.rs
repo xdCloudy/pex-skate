@@ -259,12 +259,14 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
     const A: u16 = 1 << 12;
     const B: u16 = 1 << 13;
     const X: u16 = 1 << 14;
+    const Y: u16 = 1 << 15;
     let axis = |value: f32| (value.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
     bridge::Controls {
         buttons: u16::from(controls.dpad & 0x0f)
             | (if controls.push { A } else { 0 })
             | (if controls.brake { B } else { 0 })
-            | (if controls.push_left { X } else { 0 }),
+            | (if controls.push_left { X } else { 0 })
+            | (if controls.dismount { Y } else { 0 }),
         triggers: controls.triggers,
         left: [axis(controls.steer), axis(controls.forward)],
         right: [axis(controls.right_x), axis(controls.right_y)],
@@ -288,6 +290,7 @@ mod tests {
             push: true,
             push_left: true,
             brake: true,
+            dismount: false,
         });
         assert_eq!(input.buttons, (1 << 12) | (1 << 13) | (1 << 14));
         assert_eq!(input.triggers, [96, 255]);
@@ -303,5 +306,14 @@ mod tests {
             ..Controls::default()
         });
         assert_eq!(input.buttons & 0x0f, 0b1010);
+    }
+
+    #[test]
+    fn on_off_board_input_maps_to_the_stock_y_button() {
+        let input = to_engine_controls(Controls {
+            dismount: true,
+            ..Controls::default()
+        });
+        assert_eq!(input.buttons & (1 << 15), 1 << 15);
     }
 }

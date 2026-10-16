@@ -93,7 +93,7 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | Pump/forward axis | — | Left stick Y | Supported |
 | Flick-It tricks | Arrow keys | Right stick | Supported |
 | Grab with left / right hand | Q / E | Left / right trigger | Supported |
-| Get on/off board | F | Skate 3's in-game board controls | Not implemented in PEX Skate |
+| Get on/off board | F | Y | Supported |
 | Interact | C | Skate 3's in-game interact control | Not implemented in PEX Skate |
 | Gameplay gestures | I (up), K (down), U (left), O (right) | D-pad | Supported |
 | Menu / start / back | Z / Enter / Backspace | SkateGM menu controls | Not implemented in PEX Skate |
@@ -109,7 +109,7 @@ SkateGM documents the broader original keyboard and controller layout; the table
 
 ## Protocol
 
-The client sends a `pexskate:control` custom payload once per client tick while Skate mode is active. The v4 body carries action flags, four D-pad directions, left/right trigger pressure, and four signed stick axes; triggers feed the engine's grab inputs, D-pad directions drive Skate 3 gameplay gestures, left-stick X steers, and right-stick X/Y drive Skate 3's Flick-It/trick recognition. The server accepts v1, v2, and v3 packets for compatibility. Server state v4 includes the engine root, board position/quaternion, velocity, score values, clean/sketchy flags, UTF-8 trick display name, hips position, a 36-joint presence mask and quantized offsets, plus the camera offset, forward/up vectors and field of view. The client interpolates the skeletal and camera snapshots.
+The client sends a `pexskate:control` custom payload once per client tick while Skate mode is active. The v5 body carries action flags for pushes, brake and dismount, four D-pad directions, left/right trigger pressure, and four signed stick axes; triggers feed the engine's grab inputs, the D-pad drives Skate 3 gameplay gestures, and the dismount flag drives the engine's on/off-board toggle. Left-stick X steers, and right-stick X/Y drive Skate 3's Flick-It/trick recognition. The server accepts v1 through v4 packets for compatibility. Server state v4 includes the engine root, board position/quaternion, velocity, score values, clean/sketchy flags, UTF-8 trick display name, hips position, a 36-joint presence mask and quantized offsets, plus the camera offset, forward/up vectors and field of view. The client interpolates the skeletal and camera snapshots.
 
 The server clears controls after 250 ms without a fresh client packet, removes player state on disconnect, and sends engine state to clients at no more than 20 updates per second per skater. The local Minecraft skin rig uses a simplified six-part retarget of the engine skeleton; the original Skate 3 mesh and detailed facial/hand/foot animation are not loaded.
 
