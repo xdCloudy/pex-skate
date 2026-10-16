@@ -34,6 +34,8 @@ jobs:
         run: cargo test --locked
       - name: Build PEX plugin component
         run: cargo build --locked --release --target wasm32-wasip2
+      - name: Smoke test plugin in the pinned PEX server runtime
+        run: bash ./tools/smoke-test-pex-runtime.sh target/wasm32-wasip2/release/pex_skate.wasm
       - name: Build Fabric client companion
         working-directory: client
         run: bash ./gradlew build
