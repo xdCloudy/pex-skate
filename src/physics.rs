@@ -21,6 +21,37 @@ pub struct Controls {
 impl Controls {
     /// Decode legacy controls through v7's marker and checkpoint actions.
     pub fn decode(packet: &[u8]) -> Option<Self> {
+        if packet.first() == Some(&9) {
+            let [
+                9,
+                flags,
+                left_trigger,
+                right_trigger,
+                forward,
+                steer,
+                right_x,
+                right_y,
+                modifiers,
+                _,
+                _,
+                _,
+                _,
+            ] = packet
+            else {
+                return None;
+            };
+            return Self::decode(&[
+                8,
+                *flags,
+                *left_trigger,
+                *right_trigger,
+                *forward,
+                *steer,
+                *right_x,
+                *right_y,
+                *modifiers,
+            ]);
+        }
         match packet {
             [1, flags, forward, steer] if flags & !0x1f == 0 => Some(Self {
                 forward: f32::from(*forward as i8) / 127.0,
@@ -210,9 +241,24 @@ impl Controls {
     }
 }
 
+/// Control sequence carried by protocol v9. Sequence values wrap modulo 2^32.
+pub fn input_sequence(packet: &[u8]) -> Option<u32> {
+    if packet.len() != 13 || packet[0] != 9 {
+        return None;
+    }
+    Some(u32::from_be_bytes(packet[9..13].try_into().ok()?))
+}
+
+/// Live v5 sessions require sequenced v9 controls; unsequenced legacy packets
+/// remain decodable for format tests but are never accepted by the server.
+pub fn decode_sequenced(packet: &[u8]) -> Option<(Controls, u32)> {
+    let sequence = input_sequence(packet)?;
+    Some((Controls::decode(packet)?, sequence))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Controls;
+    use super::{Controls, decode_sequenced, input_sequence};
 
     #[test]
     fn rejects_malformed_or_unknown_control_packets() {
@@ -293,5 +339,16 @@ mod tests {
         assert!(controls.respawn);
         assert!(controls.shove);
         assert!(Controls::decode(&[8, 0, 0, 0, 0, 0, 0, 0, 8]).is_none());
+    }
+
+    #[test]
+    fn decodes_v9_controls_and_big_endian_sequence() {
+        let packet = [9, 0, 0, 0, 0, 0, 0, 0, 7, 0x12, 0x34, 0x56, 0x78];
+        assert!(Controls::decode(&packet).unwrap().shove);
+        assert_eq!(input_sequence(&packet), Some(0x1234_5678));
+        assert_eq!(decode_sequenced(&packet).unwrap().1, 0x1234_5678);
+        assert!(Controls::decode(&packet[..12]).is_none());
+        assert_eq!(input_sequence(&packet[..12]), None);
+        assert!(decode_sequenced(&[8, 0, 0, 0, 0, 0, 0, 0, 0]).is_none());
     }
 }

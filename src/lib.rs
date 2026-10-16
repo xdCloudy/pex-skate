@@ -4,7 +4,7 @@ mod physics;
 
 use collision::CollisionScan;
 use engine::{SkatePose, SkateSession};
-use physics::Controls;
+use physics::{Controls, decode_sequenced};
 use pumpkin_plugin_api::{
     Context, Plugin, PluginMetadata, Server,
     command::Command,
@@ -34,7 +34,7 @@ const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
-const CLIENT_PROTOCOL_VERSION: u8 = 4;
+const CLIENT_PROTOCOL_VERSION: u8 = 5;
 const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 
 fn server_state() -> &'static Mutex<ServerState> {
@@ -45,12 +45,18 @@ fn supports_client_protocol(data: &[u8]) -> bool {
     data == [CLIENT_PROTOCOL_VERSION]
 }
 
+fn sequence_is_newer(candidate: u32, previous: u32) -> bool {
+    (candidate.wrapping_sub(previous) as i32) > 0
+}
+
 #[derive(Default)]
 struct ServerState {
     compatible_clients: HashSet<String>,
     enabled: HashSet<String>,
     controls: HashMap<String, Controls>,
     control_updated_at: HashMap<String, Instant>,
+    control_sequences: HashMap<String, u32>,
+    acknowledged_control_sequences: HashMap<String, u32>,
     sessions: HashMap<String, SkateSession>,
     map_backed: HashSet<String>,
     map_filenames: HashMap<String, String>,
@@ -310,6 +316,7 @@ impl CommandHandler for ToggleSkate {
                         true,
                         Some(&map_filename),
                         Some(&map_digests),
+                        0,
                     );
                     sender.send_message(TextComponent::text(&format!(
                         "Skate 3 Engine mode enabled on {}.",
@@ -359,6 +366,8 @@ fn clear_skate_state(state: &mut ServerState, name: &str) -> bool {
     state.enabled.remove(name);
     state.controls.remove(name);
     state.control_updated_at.remove(name);
+    state.control_sequences.remove(name);
+    state.acknowledged_control_sequences.remove(name);
     state.sessions.remove(name);
     state.map_backed.remove(name);
     state.map_filenames.remove(name);
@@ -503,7 +512,7 @@ impl EventHandler<PlayerCustomPayloadEvent> for SkateInput {
         if event.channel != "pexskate:control" {
             return event;
         }
-        let Some(controls) = Controls::decode(&event.data) else {
+        let Some((controls, sequence)) = decode_sequenced(&event.data) else {
             return event;
         };
         let name = event.player.get_name();
@@ -512,6 +521,14 @@ impl EventHandler<PlayerCustomPayloadEvent> for SkateInput {
         let shove_pose = if let Ok(mut state) = server_state().lock()
             && state.enabled.contains(&name)
         {
+            if state
+                .control_sequences
+                .get(&name)
+                .is_some_and(|previous| !sequence_is_newer(sequence, *previous))
+            {
+                return event;
+            }
+            state.control_sequences.insert(name.clone(), sequence);
             let previous_is_fresh = state
                 .control_updated_at
                 .get(&name)
@@ -961,6 +978,7 @@ fn tick_pending_skate_load(server: &Server, name: &str, global_budget: &mut usiz
         false,
         None,
         None,
+        0,
     );
     player.send_system_message(TextComponent::text("Skate 3 Engine mode enabled."), true);
 }
@@ -972,7 +990,15 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
     let now = Instant::now();
     let world_id = player.as_entity().get_world().get_id();
     let player_position = player.get_position();
-    let (pose, should_refresh_collision, should_broadcast, map_backed, map_filename, map_digests) =
+    let (
+        pose,
+        should_refresh_collision,
+        should_broadcast,
+        map_backed,
+        map_filename,
+        map_digests,
+        acknowledged_sequence,
+    ) =
         {
             let Ok(mut state) = server_state().lock() else {
                 return;
@@ -1064,6 +1090,13 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 );
                 return;
             }
+            if steps > 0
+                && let Some(sequence) = state.control_sequences.get(name).copied()
+            {
+                state
+                    .acknowledged_control_sequences
+                    .insert(name.to_owned(), sequence);
+            }
             for (other_name, other_pose, _) in &nearby_players {
                 let Some(velocity) = player_collision_impact(&pose, other_pose) else {
                     continue;
@@ -1110,6 +1143,11 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 map_backed,
                 map_filename,
                 map_digests,
+                state
+                    .acknowledged_control_sequences
+                    .get(name)
+                    .copied()
+                    .unwrap_or(0),
             )
         };
 
@@ -1151,6 +1189,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             map_backed,
             map_filename.as_deref(),
             map_digests.as_ref(),
+            acknowledged_sequence,
         );
     }
 }
@@ -1264,9 +1303,10 @@ fn broadcast_pose(
     map_backed: bool,
     map_filename: Option<&str>,
     map_digests: Option<&MapDigests>,
+    acknowledged_sequence: u32,
 ) {
     let mut payload = Vec::with_capacity(1100);
-    payload.push(8); // version
+    payload.push(9); // version
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in pose.root {
@@ -1297,6 +1337,7 @@ fn broadcast_pose(
     payload.extend_from_slice(trick_name);
     append_visual(&mut payload, pose.visual.as_ref(), pose.root);
     append_map_identity(&mut payload, map_backed, map_filename, map_digests);
+    payload.extend_from_slice(&acknowledged_sequence.to_be_bytes());
     broadcast_payload(server, &payload);
 }
 
@@ -1384,7 +1425,7 @@ fn broadcast_state(
     active: bool,
 ) {
     let mut payload = Vec::with_capacity(84);
-    payload.push(8);
+    payload.push(9);
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in [position.0 as f32, position.1 as f32, position.2 as f32] {
@@ -1415,6 +1456,7 @@ fn broadcast_state(
     payload.resize(payload.len() + 10 * 4, 0);
     payload.resize(payload.len() + 36 * 4 * 2, 0);
     append_map_identity(&mut payload, false, None, None);
+    payload.extend_from_slice(&0_u32.to_be_bytes());
 
     broadcast_payload(server, &payload);
 }
@@ -1436,8 +1478,8 @@ mod integration_tests {
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, ServerState,
         append_map_identity, append_visual, clear_skate_state, collision::CollisionScan,
         collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
-        physics::Controls, player_collision_impact, should_refresh_collision, shove_impact,
-        shove_pressed_edge, supports_client_protocol, take_collision_budget,
+        physics::Controls, player_collision_impact, sequence_is_newer, should_refresh_collision,
+        shove_impact, shove_pressed_edge, supports_client_protocol, take_collision_budget,
     };
     use engine::SkatePose;
     use std::time::{Duration, Instant};
@@ -1646,10 +1688,20 @@ mod integration_tests {
     #[test]
     fn handshake_requires_the_supported_client_protocol_version() {
         assert!(supports_client_protocol(&[CLIENT_PROTOCOL_VERSION]));
+        assert!(!supports_client_protocol(&[4]));
         assert!(!supports_client_protocol(&[1]));
         assert!(!supports_client_protocol(&[2]));
         assert!(!supports_client_protocol(&[CLIENT_PROTOCOL_VERSION, 0]));
         assert!(!supports_client_protocol(&[]));
+    }
+
+    #[test]
+    fn control_sequences_reject_replays_and_allow_u32_wraparound() {
+        assert!(sequence_is_newer(11, 10));
+        assert!(!sequence_is_newer(10, 10));
+        assert!(!sequence_is_newer(9, 10));
+        assert!(sequence_is_newer(0, u32::MAX));
+        assert!(!sequence_is_newer(u32::MAX, 0));
     }
 
     #[test]

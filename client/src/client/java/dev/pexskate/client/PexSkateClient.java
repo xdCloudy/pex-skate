@@ -28,6 +28,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.resources.Identifier;
 import net.minecraft.network.chat.Component;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.nio.IntBuffer;
 
@@ -66,6 +67,8 @@ public final class PexSkateClient implements ClientModInitializer {
     private CameraType previousCamera;
     private long gamepadHandle;
     private boolean gamepadSubsystemReady;
+    private int nextControlSequence;
+    private final Map<Integer, Long> outstandingControls = new LinkedHashMap<>();
     private static final Map<Integer, ItemDisplay> BOARDS = new HashMap<>();
     private static final Map<Integer, Long> LAST_SEEN = new HashMap<>();
     private static final Identifier BOARD_MODEL = Identifier.fromNamespaceAndPath("pexskate", "skateboard");
@@ -83,8 +86,12 @@ public final class PexSkateClient implements ClientModInitializer {
         PayloadTypeRegistry.serverboundPlay().register(ControlPayload.TYPE, ControlPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(SkateStatePayload.TYPE, SkateStatePayload.CODEC);
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
-            if (payload.version() == 4 || payload.version() == 5 || payload.version() == 6 || payload.version() == 7 || payload.version() == 8) {
+            if (payload.version() == 4 || payload.version() == 5 || payload.version() == 6 || payload.version() == 7 || payload.version() == 8 || payload.version() == 9) {
                 context.client().execute(() -> {
+                    if (payload.version() >= 9 && context.client().player != null
+                            && context.client().player.getId() == payload.entityId()) {
+                        acknowledgeControls(payload.acknowledgedControlSequence());
+                    }
                     if (payload.active() && payload.mapBacked()
                             && !SkateMapModel.isReadyFor(payload.mapFilename(), payload.mapSha256(), payload.propsSha256())) {
                         if (payload.version() >= 8) SkateMapModel.loadMap(payload.mapFilename(), payload.mapSha256(), payload.propsSha256());
@@ -109,10 +116,16 @@ public final class PexSkateClient implements ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
             SkateSkaterModel.load();
         });
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
-                ClientPlayNetworking.send(new ClientHelloPayload((byte) 4)));
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            nextControlSequence = 0;
+            outstandingControls.clear();
+            SkatePoseCache.resetInputRoundTrip();
+            ClientPlayNetworking.send(new ClientHelloPayload((byte) 5));
+        });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             clearBoards();
+            outstandingControls.clear();
+            nextControlSequence = 0;
             SkateMapModel.clearActive();
             mapInstallWarningShown = false;
             if (skating && previousCamera != null) {
@@ -273,11 +286,26 @@ public final class PexSkateClient implements ClientModInitializer {
                 | (respawn ? 2 : 0)
                 | (SHOVE.isDown() || pad.shove() ? 4 : 0));
 
+        int sequence = nextControlSequence++;
+        outstandingControls.put(sequence, System.nanoTime());
+        while (outstandingControls.size() > 128) {
+            outstandingControls.remove(outstandingControls.keySet().iterator().next());
+        }
         ClientPlayNetworking.send(new ControlPayload(
-                (byte) 8, (byte) flags,
+                (byte) 9, (byte) flags,
                 quantizeTrigger(leftTrigger), quantizeTrigger(rightTrigger),
                 quantize(pad.forward()), quantize(steer), quantize(rightX), quantize(rightY),
-                modifiers));
+                modifiers, sequence));
+    }
+
+    private void acknowledgeControls(int sequence) {
+        Long sentAt = outstandingControls.remove(sequence);
+        if (sentAt != null) SkatePoseCache.updateInputRoundTrip(System.nanoTime() - sentAt);
+        outstandingControls.keySet().removeIf(candidate -> !sequenceAfter(candidate, sequence));
+    }
+
+    private static boolean sequenceAfter(int candidate, int reference) {
+        return candidate - reference > 0;
     }
 
     private Gamepad readGamepad() {

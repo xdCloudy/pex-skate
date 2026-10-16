@@ -10,6 +10,7 @@ public final class SkatePoseCache {
     private static final long MAX_EXTRAPOLATION_NANOS = 50_000_000L;
     private static final long MAX_INTERPOLATION_GAP_NANOS = 500_000_000L;
     private static final float SNAP_DISTANCE_SQUARED = 64.0f;
+    private static volatile long maxExtrapolationNanos = 25_000_000L;
     private static final Map<Integer, Track> TRACKS = new HashMap<>();
 
     private SkatePoseCache() {}
@@ -54,6 +55,15 @@ public final class SkatePoseCache {
         TRACKS.clear();
     }
 
+    public static void updateInputRoundTrip(long roundTripNanos) {
+        if (roundTripNanos <= 0L) return;
+        maxExtrapolationNanos = Math.clamp(roundTripNanos / 2L, 5_000_000L, MAX_EXTRAPOLATION_NANOS);
+    }
+
+    public static void resetInputRoundTrip() {
+        maxExtrapolationNanos = 25_000_000L;
+    }
+
     public static Pose sample(int entityId) {
         return sample(entityId, false);
     }
@@ -69,7 +79,7 @@ public final class SkatePoseCache {
         if (b.time <= a.time) return new Pose(b, b, 1.0f, 0.0f);
         if (sampleTime >= b.time) {
             long extrapolation = localEntity
-                    ? Math.min(sampleTime - b.time, MAX_EXTRAPOLATION_NANOS) : 0L;
+                    ? Math.min(sampleTime - b.time, maxExtrapolationNanos) : 0L;
             return new Pose(b, b, 1.0f, extrapolation / 1_000_000_000.0f);
         }
         if (sampleTime <= a.time) return new Pose(a, a, 0.0f);
