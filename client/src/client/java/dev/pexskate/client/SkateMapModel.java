@@ -475,7 +475,7 @@ final class SkateMapModel {
             int decodedSize = checkedInt(reader.u32(), MAX_MAP_BYTES, "map extension size");
             if (tag[0] == 'S' && tag[1] == 'K' && tag[2] == 'Y' && tag[3] == 'B' && schema == 2) {
                 if (sky != null) throw new IOException("SKATE map contains more than one client sky extension");
-                if (geometryMemoryEstimate + texturePixels * 4L + decodedSize > parserBudget) {
+                if (geometryMemoryEstimate + texturePixels * 4L + decodedSize * 2L > parserBudget) {
                     throw new IOException("SKATE sky extension exceeds this client's parse memory budget");
                 }
                 sky = parseSky(reader.stored(decodedSize), textures, geometryMemoryEstimate, texturePixels);
