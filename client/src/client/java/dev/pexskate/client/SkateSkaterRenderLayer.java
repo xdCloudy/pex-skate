@@ -20,7 +20,7 @@ final class SkateSkaterRenderLayer extends RenderLayer<AvatarRenderState, Player
         if (state.isInvisible || state.isInvisibleToPlayer || !SkateSkaterModel.isReady()) return;
         SkatePoseCache.Pose pose = SkatePoseCache.sample(state.id);
         if (pose == null) return;
-        SkateSkaterModel.submit(state.id, matrices, collector, light,
-                LivingEntityRenderer.getOverlayCoords(state, 0.0f));
+        SkateSkaterModel.submit(matrices, collector, light,
+                LivingEntityRenderer.getOverlayCoords(state, 0.0f), pose);
     }
 }

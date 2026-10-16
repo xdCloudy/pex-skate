@@ -80,19 +80,31 @@ public final class SkateSkaterModel {
         model = null;
     }
 
-    static void submit(int entityId, PoseStack matrices, SubmitNodeCollector collector, int light, int overlay) {
+    static void submit(PoseStack matrices, SubmitNodeCollector collector, int light, int overlay,
+                       SkatePoseCache.Pose pose) {
         Model current = model;
-        SkatePoseCache.Pose pose = SkatePoseCache.sample(entityId);
         if (current == null || pose == null) return;
         Vec3 camera = Minecraft.getInstance().gameRenderer.mainCamera().position();
         Matrix4f inversePose = new Matrix4f(matrices.last().pose()).invert();
         Matrix3f inverseNormal = new Matrix3f(matrices.last().normal()).invert();
+        // Every GLB primitive uses this same 36-joint snapshot. Decode and
+        // interpolate it once per skater submission instead of allocating
+        // point/quaternion arrays again for every material primitive.
+        float[][] jointPoints = new float[BONE_NAMES.length][];
+        float[][] jointRotations = new float[BONE_NAMES.length][];
+        for (int slot = 0; slot < BONE_NAMES.length; slot++) {
+            if (pose.has(slot)) {
+                jointPoints[slot] = pose.point(slot);
+                jointRotations[slot] = pose.rotation(slot);
+            }
+        }
         for (Primitive primitive : current.primitives) {
             RenderType renderType = primitive.translucent
                     ? RenderTypes.entityTranslucent(primitive.texture)
                     : RenderTypes.entityCutoutCull(primitive.texture);
             collector.submitCustomGeometry(matrices, renderType, (stackPose, vertices) ->
-                    primitive.draw(stackPose, vertices, pose, camera, inversePose, inverseNormal, light, overlay));
+                    primitive.draw(stackPose, vertices, jointPoints, jointRotations,
+                            camera, inversePose, inverseNormal, light, overlay));
         }
     }
 
@@ -349,16 +361,9 @@ public final class SkateSkaterModel {
             this.skinnedNormals = new float[normals.length];
         }
 
-        private void draw(PoseStack.Pose matrix, VertexConsumer output, SkatePoseCache.Pose pose, Vec3 camera,
+        private void draw(PoseStack.Pose matrix, VertexConsumer output,
+                          float[][] jointPoints, float[][] jointRotations, Vec3 camera,
                           Matrix4f inversePose, Matrix3f inverseNormal, int light, int overlay) {
-            float[][] jointPoints = new float[BONE_NAMES.length][];
-            float[][] jointRotations = new float[BONE_NAMES.length][];
-            for (int slot : jointSlots) {
-                if (jointPoints[slot] == null) {
-                    jointPoints[slot] = pose.point(slot);
-                    jointRotations[slot] = pose.rotation(slot);
-                }
-            }
             float[] rotatedPosition = new float[3];
             float[] rotatedNormal = new float[3];
             for (int vertex = 0; vertex < positions.length / 3; vertex++) {
