@@ -1,6 +1,7 @@
 package dev.pexskate.client;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.player.PlayerModel;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
@@ -18,7 +19,9 @@ final class SkateSkaterRenderLayer extends RenderLayer<AvatarRenderState, Player
     public void submit(PoseStack matrices, SubmitNodeCollector collector, int light,
                        AvatarRenderState state, float limbSwing, float limbSwingAmount) {
         if (state.isInvisible || state.isInvisibleToPlayer || !SkateSkaterModel.isReady()) return;
-        SkatePoseCache.Pose pose = SkatePoseCache.sample(state.id);
+        Minecraft client = Minecraft.getInstance();
+        boolean localEntity = client.player != null && client.player.getId() == state.id;
+        SkatePoseCache.Pose pose = SkatePoseCache.sample(state.id, localEntity);
         if (pose == null) return;
         SkateSkaterModel.submit(matrices, collector, light,
                 LivingEntityRenderer.getOverlayCoords(state, 0.0f), pose);
