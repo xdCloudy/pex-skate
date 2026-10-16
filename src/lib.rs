@@ -35,6 +35,7 @@ const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
 const CLIENT_PROTOCOL_VERSION: u8 = 3;
+const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -61,6 +62,7 @@ struct ServerState {
     collision_center: HashMap<String, (f32, f32, f32)>,
     collision_scans: HashMap<String, CollisionScan>,
     collision_scan_cursor: Option<String>,
+    collision_impacts: HashMap<(String, String), Instant>,
 }
 
 struct PendingSkateLoad {
@@ -347,6 +349,9 @@ fn clear_skate_state(state: &mut ServerState, name: &str) -> bool {
     state.last_broadcast_at.remove(name);
     state.collision_center.remove(name);
     state.collision_scans.remove(name);
+    state
+        .collision_impacts
+        .retain(|(left, right), _| left != name && right != name);
     had_skate_state
 }
 
@@ -564,6 +569,46 @@ fn shove_impact(attacker: &SkatePose, target: [f32; 3]) -> Option<([f32; 3], f32
         return None;
     }
     Some(([forward[0] * 3.0, 1.25, forward[1] * 3.0], distance_squared))
+}
+
+fn player_collision_impact(attacker: &SkatePose, target: &SkatePose) -> Option<[f32; 3]> {
+    let board = &attacker.board;
+    let target_root = target.root;
+    let values = attacker
+        .velocity
+        .iter()
+        .chain(target.velocity.iter())
+        .chain(board.iter())
+        .chain(target_root.iter());
+    if values.clone().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let dx = target_root[0] - board[0];
+    let dz = target_root[2] - board[2];
+    let horizontal_distance_squared = dx * dx + dz * dz;
+    if horizontal_distance_squared > 0.36
+        || horizontal_distance_squared < 1e-4
+        || board[1] < target_root[1] - 0.25
+        || board[1] > target_root[1] + 1.55
+    {
+        return None;
+    }
+
+    let relative_x = attacker.velocity[0] - target.velocity[0];
+    let relative_z = attacker.velocity[2] - target.velocity[2];
+    let relative_speed = (relative_x * relative_x + relative_z * relative_z).sqrt();
+    if relative_speed < 5.5 {
+        return None;
+    }
+
+    let direction_length = horizontal_distance_squared.sqrt();
+    let direction = [dx / direction_length, dz / direction_length];
+    let magnitude = (2.5 + relative_speed * 0.35).min(8.0);
+    Some([
+        direction[0] * magnitude,
+        (1.8 + relative_speed * 0.08).min(3.0),
+        direction[1] * magnitude,
+    ])
 }
 
 struct SkatePlayerLeave;
@@ -879,117 +924,141 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
     let now = Instant::now();
     let world_id = player.as_entity().get_world().get_id();
     let player_position = player.get_position();
-    let (pose, should_refresh_collision, should_broadcast, map_backed, map_filename) = {
-        let Ok(mut state) = server_state().lock() else {
-            return;
-        };
-        if !state.enabled.contains(name) {
-            return;
-        }
-        let controls = state.controls_for(name, now);
-        let previous = state
-            .engine_updated_at
-            .insert(name.to_owned(), now)
-            .unwrap_or(now);
-        let accumulated = state.engine_accumulator.entry(name.to_owned()).or_default();
-        *accumulated += now
-            .saturating_duration_since(previous)
-            .as_secs_f32()
-            .min(0.25);
-        let mut remaining = *accumulated;
-        let current_map_backed = state.map_backed.contains(name);
-        let current_map = state.map_filenames.get(name);
-        let mut nearby_players = Vec::new();
-        for (other_name, other_session) in &state.sessions {
-            if other_name == name
-                || state.map_backed.contains(other_name) != current_map_backed
-                || (current_map_backed && state.map_filenames.get(other_name) != current_map)
-            {
-                continue;
-            }
-            let other_pose = other_session.pose();
-            let dx = other_pose.root[0] - player_position.0 as f32;
-            let dy = other_pose.root[1] - player_position.1 as f32;
-            let dz = other_pose.root[2] - player_position.2 as f32;
-            if dx * dx + dy * dy + dz * dz > 9.0 {
-                continue;
-            }
-            let Some(other_player) = server.get_player_by_name(other_name) else {
-                continue;
+    let (pose, should_refresh_collision, should_broadcast, map_backed, map_filename) =
+        {
+            let Ok(mut state) = server_state().lock() else {
+                return;
             };
-            if other_player.as_entity().get_world().get_id() != world_id {
-                continue;
+            if !state.enabled.contains(name) {
+                return;
             }
-            nearby_players.push(other_pose);
-            if nearby_players.len() == 16 {
-                break;
-            }
-        }
-        let Some(session) = state.sessions.get_mut(name) else {
-            return;
-        };
-        let period = session.period().clamp(1.0 / 120.0, 1.0 / 20.0);
-        let mut pose = session.pose();
-        let mut steps = 0;
-        let mut failure = session.refresh_player_collision(&nearby_players).err();
-        while remaining >= period && steps < 6 {
-            if failure.is_some() {
-                break;
-            }
-            match session.tick(controls) {
-                Ok(next_pose) => pose = next_pose,
-                Err(error) => {
-                    failure = Some(error);
+            let controls = state.controls_for(name, now);
+            let previous = state
+                .engine_updated_at
+                .insert(name.to_owned(), now)
+                .unwrap_or(now);
+            let accumulated = state.engine_accumulator.entry(name.to_owned()).or_default();
+            *accumulated += now
+                .saturating_duration_since(previous)
+                .as_secs_f32()
+                .min(0.25);
+            let mut remaining = *accumulated;
+            let current_map_backed = state.map_backed.contains(name);
+            let current_map = state.map_filenames.get(name);
+            let mut nearby_players = Vec::new();
+            for (other_name, other_session) in &state.sessions {
+                if other_name == name
+                    || state.map_backed.contains(other_name) != current_map_backed
+                    || (current_map_backed && state.map_filenames.get(other_name) != current_map)
+                {
+                    continue;
+                }
+                let other_pose = other_session.pose();
+                let dx = other_pose.root[0] - player_position.0 as f32;
+                let dy = other_pose.root[1] - player_position.1 as f32;
+                let dz = other_pose.root[2] - player_position.2 as f32;
+                if dx * dx + dy * dy + dz * dz > 9.0 {
+                    continue;
+                }
+                let Some(other_player) = server.get_player_by_name(other_name) else {
+                    continue;
+                };
+                if other_player.as_entity().get_world().get_id() != world_id {
+                    continue;
+                }
+                nearby_players.push((other_name.clone(), other_pose));
+                if nearby_players.len() == 16 {
                     break;
                 }
             }
-            remaining -= period;
-            steps += 1;
-        }
-        if steps == 6 {
-            remaining = remaining.min(period);
-        }
-        if let Some(error) = failure {
-            clear_skate_state(&mut state, name);
-            drop(state);
-            let entity_id = player.as_entity().get_id();
-            let position = player.get_position();
-            broadcast_state(server, entity_id, position, player.get_yaw(), 0.0, false);
-            player.send_system_message(
-                TextComponent::text(&format!(
-                    "Skate Engine stopped after a simulation error: {error}"
-                )),
-                true,
-            );
-            return;
-        }
-        state.engine_accumulator.insert(name.to_owned(), remaining);
-        let center = state.collision_center.get(name).copied().unwrap_or((
-            pose.root[0],
-            pose.root[1],
-            pose.root[2],
-        ));
-        let map_backed = state.map_backed.contains(name);
-        let map_filename = state.map_filenames.get(name).cloned();
-        let should_refresh_collision = should_refresh_collision(map_backed, center, pose.root);
-        let should_broadcast = state
-            .last_broadcast_at
-            .get(name)
-            .is_none_or(|last| now.saturating_duration_since(*last) >= STATE_BROADCAST_INTERVAL);
-        if should_broadcast {
-            state.last_broadcast_at.insert(name.to_owned(), now);
-            if let Some(session) = state.sessions.get_mut(name) {
-                pose.visual = session.skeletal_pose();
+            let Some(session) = state.sessions.get_mut(name) else {
+                return;
+            };
+            let period = session.period().clamp(1.0 / 120.0, 1.0 / 20.0);
+            let mut pose = session.pose();
+            let mut steps = 0;
+            let collision_players: Vec<_> = nearby_players
+                .iter()
+                .map(|(_, player_pose)| player_pose.clone())
+                .collect();
+            let mut failure = session.refresh_player_collision(&collision_players).err();
+            while remaining >= period && steps < 6 {
+                if failure.is_some() {
+                    break;
+                }
+                match session.tick(controls) {
+                    Ok(next_pose) => pose = next_pose,
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+                remaining -= period;
+                steps += 1;
             }
-        }
-        (
-            pose,
-            should_refresh_collision,
-            should_broadcast,
-            map_backed,
-            map_filename,
-        )
-    };
+            if steps == 6 {
+                remaining = remaining.min(period);
+            }
+            if let Some(error) = failure {
+                clear_skate_state(&mut state, name);
+                drop(state);
+                let entity_id = player.as_entity().get_id();
+                let position = player.get_position();
+                broadcast_state(server, entity_id, position, player.get_yaw(), 0.0, false);
+                player.send_system_message(
+                    TextComponent::text(&format!(
+                        "Skate Engine stopped after a simulation error: {error}"
+                    )),
+                    true,
+                );
+                return;
+            }
+            for (other_name, other_pose) in &nearby_players {
+                let Some(velocity) = player_collision_impact(&pose, other_pose) else {
+                    continue;
+                };
+                let pair = if name < other_name.as_str() {
+                    (name.to_owned(), other_name.clone())
+                } else {
+                    (other_name.clone(), name.to_owned())
+                };
+                if state.collision_impacts.get(&pair).is_some_and(|last| {
+                    now.saturating_duration_since(*last) < PLAYER_IMPACT_COOLDOWN
+                }) {
+                    continue;
+                }
+                if let Some(target) = state.sessions.get_mut(other_name)
+                    && target.knock_down(velocity)
+                {
+                    state.collision_impacts.insert(pair, now);
+                }
+            }
+            state.engine_accumulator.insert(name.to_owned(), remaining);
+            let center = state.collision_center.get(name).copied().unwrap_or((
+                pose.root[0],
+                pose.root[1],
+                pose.root[2],
+            ));
+            let map_backed = state.map_backed.contains(name);
+            let map_filename = state.map_filenames.get(name).cloned();
+            let should_refresh_collision = should_refresh_collision(map_backed, center, pose.root);
+            let should_broadcast = state.last_broadcast_at.get(name).is_none_or(|last| {
+                now.saturating_duration_since(*last) >= STATE_BROADCAST_INTERVAL
+            });
+            if should_broadcast {
+                state.last_broadcast_at.insert(name.to_owned(), now);
+                if let Some(session) = state.sessions.get_mut(name) {
+                    pose.visual = session.skeletal_pose();
+                }
+            }
+            (
+                pose,
+                should_refresh_collision,
+                should_broadcast,
+                map_backed,
+                map_filename,
+            )
+        };
 
     let root = (
         f64::from(pose.root[0]),
@@ -1291,11 +1360,43 @@ mod integration_tests {
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, PendingSkateLoad, ServerState,
         append_map_identity, append_visual, clear_skate_state, collision::CollisionScan,
         collision_refresh_needed, collision_work_order, engine, initial_scan_recenter_needed,
-        physics::Controls, should_refresh_collision, shove_impact, shove_pressed_edge,
-        supports_client_protocol, take_collision_budget,
+        physics::Controls, player_collision_impact, should_refresh_collision, shove_impact,
+        shove_pressed_edge, supports_client_protocol, take_collision_budget,
     };
     use engine::SkatePose;
     use std::time::{Duration, Instant};
+
+    fn pose(root: [f32; 3], velocity: [f32; 3]) -> SkatePose {
+        SkatePose {
+            root,
+            velocity,
+            board: [root[0], root[1], root[2], 0.0, 0.0, 0.0, 1.0],
+            trick_name: String::new(),
+            sequence_score: 0.0,
+            line_score: 0.0,
+            total_score: 0.0,
+            multiplier: 1.0,
+            line_time: 0.0,
+            clean: true,
+            sketchy: false,
+            visual: None,
+        }
+    }
+
+    #[test]
+    fn fast_board_impact_knocks_down_only_inside_the_proxy_envelope() {
+        let attacker = pose([0.0, 0.0, 0.0], [8.0, 0.0, 0.0]);
+        let target = pose([0.5, 0.0, 0.0], [0.0, 0.0, 0.0]);
+        let impulse = player_collision_impact(&attacker, &target).unwrap();
+        assert!(impulse[0] > 0.0);
+        assert!(impulse[1] >= 1.8);
+
+        assert!(
+            player_collision_impact(&pose([0.5, 0.0, 0.0], [4.0, 0.0, 0.0]), &target).is_none()
+        );
+        assert!(player_collision_impact(&attacker, &pose([1.0, 0.0, 0.0], [0.0; 3])).is_none());
+        assert!(player_collision_impact(&attacker, &pose([0.5, 2.0, 0.0], [0.0; 3])).is_none());
+    }
 
     #[test]
     fn stale_client_input_resets_to_neutral_controls() {
