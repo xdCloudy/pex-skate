@@ -25,6 +25,7 @@ static DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 const INPUT_TIMEOUT: Duration = Duration::from_millis(250);
 const STATE_BROADCAST_INTERVAL: Duration = Duration::from_millis(50);
 const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
+const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -40,7 +41,7 @@ struct ServerState {
     engine_accumulator: HashMap<String, f32>,
     engine_updated_at: HashMap<String, Instant>,
     last_broadcast_at: HashMap<String, Instant>,
-    collision_center: HashMap<String, (f32, f32)>,
+    collision_center: HashMap<String, (f32, f32, f32)>,
 }
 
 impl ServerState {
@@ -228,7 +229,7 @@ impl CommandHandler for ToggleSkate {
             state.last_broadcast_at.insert(name.clone(), now);
             state
                 .collision_center
-                .insert(name.clone(), (spawn[0], spawn[2]));
+                .insert(name.clone(), (spawn[0], spawn[1], spawn[2]));
             drop(state);
             broadcast_pose(&server, player.as_entity().get_id(), &pose, true);
             sender.send_message(TextComponent::text("Skate 3 Engine mode enabled."));
@@ -389,15 +390,12 @@ impl EventHandler<PlayerMoveEvent> for SkateMovement {
             f64::from(pose.root[1]),
             f64::from(pose.root[2]),
         );
-        let center = state
-            .collision_center
-            .get(&name)
-            .copied()
-            .unwrap_or((pose.root[0], pose.root[2]));
-        let dx = pose.root[0] - center.0;
-        let dz = pose.root[2] - center.1;
-        let should_refresh_collision =
-            dx * dx + dz * dz >= COLLISION_REFRESH_DISTANCE * COLLISION_REFRESH_DISTANCE;
+        let center = state.collision_center.get(&name).copied().unwrap_or((
+            pose.root[0],
+            pose.root[1],
+            pose.root[2],
+        ));
+        let should_refresh_collision = collision_refresh_needed(center, pose.root);
         let should_broadcast = state
             .last_broadcast_at
             .get(&name)
@@ -433,7 +431,7 @@ impl EventHandler<PlayerMoveEvent> for SkateMovement {
                 session.refresh_collision(local.triangles, local.rails)?;
                 state
                     .collision_center
-                    .insert(name.clone(), (pose.root[0], pose.root[2]));
+                    .insert(name.clone(), (pose.root[0], pose.root[1], pose.root[2]));
                 Ok(())
             });
             if let Err(error) = refreshed {
@@ -470,6 +468,14 @@ impl EventHandler<PlayerMoveEvent> for SkateMovement {
         }
         event
     }
+}
+
+fn collision_refresh_needed(center: (f32, f32, f32), root: [f32; 3]) -> bool {
+    let dx = root[0] - center.0;
+    let dy = root[1] - center.1;
+    let dz = root[2] - center.2;
+    dx * dx + dz * dz >= COLLISION_REFRESH_DISTANCE * COLLISION_REFRESH_DISTANCE
+        || dy.abs() >= COLLISION_REFRESH_VERTICAL_DISTANCE
 }
 
 fn broadcast_pose(server: &Server, entity_id: u32, pose: &SkatePose, active: bool) {
@@ -603,7 +609,10 @@ pumpkin_plugin_api::register_plugin!(PexSkate);
 
 #[cfg(test)]
 mod integration_tests {
-    use super::{INPUT_TIMEOUT, ServerState, append_visual, engine, physics::Controls};
+    use super::{
+        COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, ServerState, append_visual,
+        collision_refresh_needed, engine, physics::Controls,
+    };
     use std::time::{Duration, Instant};
 
     #[test]
@@ -637,6 +646,30 @@ mod integration_tests {
         state.controls.insert("rider".into(), controls);
         state.control_updated_at.insert("rider".into(), now);
         assert_eq!(state.controls_for("rider", now), controls);
+    }
+
+    #[test]
+    fn collision_refresh_covers_vertical_falls_before_leaving_sampled_depth() {
+        let center = (12.0, 40.0, -5.0);
+        assert!(!collision_refresh_needed(
+            center,
+            [
+                12.0,
+                40.0 + COLLISION_REFRESH_VERTICAL_DISTANCE - 0.01,
+                -5.0
+            ]
+        ));
+        assert!(collision_refresh_needed(
+            center,
+            [12.0, 40.0 - COLLISION_REFRESH_VERTICAL_DISTANCE, -5.0]
+        ));
+    }
+
+    #[test]
+    fn collision_refresh_keeps_horizontal_travel_threshold() {
+        let center = (0.0, 64.0, 0.0);
+        assert!(!collision_refresh_needed(center, [7.99, 64.0, 0.0]));
+        assert!(collision_refresh_needed(center, [8.0, 64.0, 0.0]));
     }
 
     #[test]
