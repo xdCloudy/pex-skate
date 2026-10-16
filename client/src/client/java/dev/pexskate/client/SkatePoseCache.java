@@ -8,6 +8,8 @@ public final class SkatePoseCache {
     private static final long INTERPOLATION_DELAY_NANOS = 75_000_000L;
     private static final long LOCAL_INTERPOLATION_DELAY_NANOS = 25_000_000L;
     private static final long MAX_EXTRAPOLATION_NANOS = 50_000_000L;
+    private static final long MAX_INTERPOLATION_GAP_NANOS = 500_000_000L;
+    private static final float SNAP_DISTANCE_SQUARED = 64.0f;
     private static final Map<Integer, Track> TRACKS = new HashMap<>();
 
     private SkatePoseCache() {}
@@ -29,10 +31,19 @@ public final class SkatePoseCache {
                 packet.velocityX(), packet.velocityY(), packet.velocityZ(),
                 packet.boneMask(), packet.boneOffsets(), packet.boneRotations(), boardYaw(packet), camera);
         if (track == null) TRACKS.put(packet.entityId(), new Track(next, next));
+        else if (isDiscontinuous(track.current, next)) TRACKS.put(packet.entityId(), new Track(next, next));
         else {
             track.previous = track.current;
             track.current = next;
         }
+    }
+
+    private static boolean isDiscontinuous(Frame previous, Frame next) {
+        float dx = next.rootX - previous.rootX;
+        float dy = next.rootY - previous.rootY;
+        float dz = next.rootZ - previous.rootZ;
+        return next.time - previous.time > MAX_INTERPOLATION_GAP_NANOS
+                || dx * dx + dy * dy + dz * dz > SNAP_DISTANCE_SQUARED;
     }
 
     public static void remove(int entityId) {
