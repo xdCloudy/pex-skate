@@ -27,7 +27,7 @@ jobs:
         run: cargo component build --release --target wasm32-wasip2
       - name: Build Fabric client companion
         working-directory: client
-        run: ./gradlew build
+        run: bash ./gradlew build
       - name: Assemble release files
         run: |
           mkdir -p dist
