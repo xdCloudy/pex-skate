@@ -49,6 +49,7 @@ final class SkateMapModel {
     private static volatile Model model;
     private static volatile String attemptedFilename;
     private static volatile String loadingFilename;
+    private static volatile UploadTask uploadTask;
     private static long loadGeneration;
 
     private SkateMapModel() {}
@@ -112,8 +113,7 @@ final class SkateMapModel {
                     return;
                 }
                 try {
-                    model = install(client, parsed);
-                    LOGGER.info("Loaded Skate district {} with {} material groups", filename, model.primitives.size());
+                    beginUpload(client, parsed, generation);
                 } catch (Exception installError) {
                     releaseModel();
                     LOGGER.error("Could not upload the converted Skate district from {}", maps, installError);
@@ -185,6 +185,37 @@ final class SkateMapModel {
 
     static boolean isReady() { return model != null; }
 
+    static void tick(Minecraft client) {
+        UploadTask task = uploadTask;
+        if (task == null) return;
+        if (task.generation != loadGeneration) {
+            uploadTask = null;
+            return;
+        }
+        try {
+            if (task.nextTexture < task.parsed.textures.size()) {
+                uploadTexture(client, task, task.nextTexture++);
+                return;
+            }
+            List<Primitive> primitives = new ArrayList<>(task.parsed.primitives.size());
+            for (PendingPrimitive primitive : task.parsed.primitives) {
+                primitives.add(new Primitive(primitive.positions, primitive.normals, primitive.uv,
+                        primitive.vertexIndirectLight, primitive.indices, primitive.bounds,
+                        task.textureIds[primitive.textureIndex], primitive.color));
+            }
+            model = new Model(task.parsed.filename, List.copyOf(primitives));
+            uploadTask = null;
+            loadingFilename = null;
+            LOGGER.info("Loaded Skate district {} with {} material groups",
+                    task.parsed.filename, model.primitives.size());
+        } catch (Exception installError) {
+            uploadTask = null;
+            loadingFilename = null;
+            releaseModel();
+            LOGGER.error("Could not upload the converted Skate district", installError);
+        }
+    }
+
     private static void submit(LevelRenderContext context) {
         Model current = model;
         Minecraft client = Minecraft.getInstance();
@@ -212,6 +243,7 @@ final class SkateMapModel {
     }
 
     private static void releaseModel() {
+        uploadTask = null;
         Minecraft client = Minecraft.getInstance();
         for (Identifier texture : TEXTURES) client.getTextureManager().release(texture);
         TEXTURES.clear();
@@ -366,38 +398,34 @@ final class SkateMapModel {
             if (texture < 0 || texture > textures.size()) throw new IOException("SKATE material references an invalid texture");
             int[] materialIndices = entry.getValue().toArray();
             primitives.add(new PendingPrimitive(positions, normals, uv, vertexIndirectLight,
-                    materialIndices, texture, materialColors[material]));
+                    materialIndices, primitiveBounds(positions, materialIndices), texture, materialColors[material]));
         }
         return new ParsedModel(filename, mapName, List.copyOf(textures), List.copyOf(primitives));
     }
 
-    private static Model install(Minecraft client, ParsedModel parsed) {
-        Identifier[] textures = new Identifier[parsed.textures.size() + 1];
-        textures[0] = registerWhite(client, parsed.filename);
-        for (int i = 0; i < parsed.textures.size(); i++) {
-            TextureData texture = parsed.textures.get(i);
-            NativeImage image = new NativeImage(texture.width, texture.height, false);
-            boolean transferred = false;
-            try {
-                image.getPixelBytes().put(texture.rgba);
-                Identifier id = Identifier.fromNamespaceAndPath(
-                        "pexskate", "map/" + safePath(parsed.filename) + "/texture_" + i);
-                client.getTextureManager().register(id, new DynamicTexture(
-                        () -> "PEX Skate " + parsed.mapName + " " + texture.name, image));
-                TEXTURES.add(id);
-                textures[i + 1] = id;
-                transferred = true;
-            } finally {
-                if (!transferred) image.close();
-            }
+    private static void beginUpload(Minecraft client, ParsedModel parsed, long generation) {
+        Identifier[] textureIds = new Identifier[parsed.textures.size() + 1];
+        textureIds[0] = registerWhite(client, parsed.filename);
+        uploadTask = new UploadTask(parsed, textureIds, generation);
+    }
+
+    private static void uploadTexture(Minecraft client, UploadTask task, int index) {
+        TextureData texture = task.parsed.textures.get(index);
+        NativeImage image = new NativeImage(texture.width, texture.height, false);
+        boolean transferred = false;
+        try {
+            image.getPixelBytes().put(texture.rgba);
+            Identifier id = Identifier.fromNamespaceAndPath(
+                    "pexskate", "map/" + safePath(task.parsed.filename) + "/texture_" + index);
+            client.getTextureManager().register(id, new DynamicTexture(
+                    () -> "PEX Skate " + task.parsed.mapName + " " + texture.name, image));
+            TEXTURES.add(id);
+            task.textureIds[index + 1] = id;
+            texture.rgba = null;
+            transferred = true;
+        } finally {
+            if (!transferred) image.close();
         }
-        List<Primitive> primitives = new ArrayList<>(parsed.primitives.size());
-        for (PendingPrimitive primitive : parsed.primitives) {
-            primitives.add(new Primitive(primitive.positions, primitive.normals, primitive.uv,
-                    primitive.vertexIndirectLight, primitive.indices,
-                    textures[primitive.textureIndex], primitive.color));
-        }
-        return new Model(parsed.filename, List.copyOf(primitives));
     }
 
     private static void sampleIndirectLight(List<TextureData> textures, long textureId, float strength,
@@ -426,6 +454,19 @@ final class SkateMapModel {
 
     private static float texturePixel(TextureData texture, int x, int y, int channel) {
         return (texture.rgba[(y * texture.width + x) * 4 + channel] & 255) / 255.0f;
+    }
+
+    private static float[] primitiveBounds(float[] positions, int[] indices) {
+        float[] bounds = {Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY,
+                Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY};
+        for (int index : indices) {
+            int point = index * 3;
+            for (int axis = 0; axis < 3; axis++) {
+                bounds[axis] = Math.min(bounds[axis], positions[point + axis]);
+                bounds[axis + 3] = Math.max(bounds[axis + 3], positions[point + axis]);
+            }
+        }
+        return bounds;
     }
 
     private static void skipRetailDefinition(Reader reader, int textureCount) throws IOException {
@@ -475,11 +516,35 @@ final class SkateMapModel {
     private record Model(String filename, List<Primitive> primitives) {}
     private record ParsedModel(String filename, String mapName, List<TextureData> textures,
                                List<PendingPrimitive> primitives) {}
-    private record TextureData(String name, int width, int height, byte[] rgba) {}
+    private static final class TextureData {
+        private final String name;
+        private final int width, height;
+        private byte[] rgba;
+
+        private TextureData(String name, int width, int height, byte[] rgba) {
+            this.name = name;
+            this.width = width;
+            this.height = height;
+            this.rgba = rgba;
+        }
+    }
     private record PendingPrimitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight,
-                                    int[] indices,
+                                    int[] indices, float[] bounds,
                                     int textureIndex, float[] color) {}
     private record ChunkMaterial(int material, int x, int z) {}
+
+    private static final class UploadTask {
+        private final ParsedModel parsed;
+        private final Identifier[] textureIds;
+        private final long generation;
+        private int nextTexture;
+
+        private UploadTask(ParsedModel parsed, Identifier[] textureIds, long generation) {
+            this.parsed = parsed;
+            this.textureIds = textureIds;
+            this.generation = generation;
+        }
+    }
 
     private static final class IntBuilder {
         private int[] values = new int[768];
@@ -500,7 +565,7 @@ final class SkateMapModel {
         private final float[] bounds;
 
         private Primitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight, int[] indices,
-                          Identifier texture, float[] color) {
+                          float[] bounds, Identifier texture, float[] color) {
             this.positions = positions;
             this.normals = normals;
             this.uv = uv;
@@ -508,15 +573,7 @@ final class SkateMapModel {
             this.indices = indices;
             this.texture = texture;
             this.color = color.clone();
-            this.bounds = new float[] {Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY,
-                    Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY};
-            for (int index : indices) {
-                int point = index * 3;
-                for (int axis = 0; axis < 3; axis++) {
-                    this.bounds[axis] = Math.min(this.bounds[axis], positions[point + axis]);
-                    this.bounds[axis + 3] = Math.max(this.bounds[axis + 3], positions[point + axis]);
-                }
-            }
+            this.bounds = bounds;
         }
 
         private double distanceSquared(Vec3 point) {

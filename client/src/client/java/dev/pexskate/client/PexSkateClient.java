@@ -132,7 +132,10 @@ public final class PexSkateClient implements ClientModInitializer {
                 gamepadSubsystemReady = false;
             }
         });
-        ClientTickEvents.END_CLIENT_TICK.register(this::tick);
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            SkateMapModel.tick(client);
+            tick(client);
+        });
     }
 
     private void updateBoard(Minecraft client, SkateStatePayload state) {
