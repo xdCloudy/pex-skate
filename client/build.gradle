@@ -10,7 +10,9 @@ base {
     archivesName = project.archives_base_name
 }
 
-repositories {}
+repositories {
+    maven { url = 'https://libraries.minecraft.net/' }
+}
 
 loom {
     splitEnvironmentSourceSets()
@@ -24,7 +26,7 @@ loom {
 
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    modCompileOnly "org.lwjgl:lwjgl-sdl:3.4.3"
+    compileOnly "org.lwjgl:lwjgl-sdl:3.4.3"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 }
