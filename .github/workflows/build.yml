@@ -56,7 +56,9 @@ jobs:
           (cd dist && sha256sum pex-skate.wasm pex-skate-client-26.3.jar > SHA256SUMS)
           (cd dist && zip -j PEX-Skate-26.3.zip pex-skate.wasm pex-skate-client-26.3.jar SHA256SUMS INSTALL.md LICENSE NOTICE.md LICENSE-PEX-API-APACHE LICENSE-PEX-API-MIT LICENSE-PEX-WIT LICENSE-SKATE-ENGINE NOTICE-SKATE-ENGINE)
           (cd dist && sha256sum --check SHA256SUMS)
-          test "$(unzip -Z1 dist/PEX-Skate-26.3.zip | sort | tr '\n' ' ')" = "INSTALL.md LICENSE LICENSE-PEX-API-APACHE LICENSE-PEX-API-MIT LICENSE-PEX-WIT LICENSE-SKATE-ENGINE NOTICE.md NOTICE-SKATE-ENGINE SHA256SUMS pex-skate-client-26.3.jar pex-skate.wasm "
+          expected_entries=$(printf '%s\n' INSTALL.md LICENSE NOTICE.md SHA256SUMS LICENSE-PEX-API-APACHE LICENSE-PEX-API-MIT LICENSE-PEX-WIT LICENSE-SKATE-ENGINE NOTICE-SKATE-ENGINE pex-skate-client-26.3.jar pex-skate.wasm | LC_ALL=C sort)
+          actual_entries=$(unzip -Z1 dist/PEX-Skate-26.3.zip | LC_ALL=C sort)
+          diff -u <(printf '%s\n' "$expected_entries") <(printf '%s\n' "$actual_entries")
       - uses: actions/upload-artifact@v7
         with:
           name: pex-skate-26.3
