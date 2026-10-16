@@ -51,6 +51,7 @@ public final class SkateMapModel {
     private static final int MAX_VERTICES = 8_000_000;
     private static final int MAX_INDICES = 24_000_000;
     private static final long MAX_TEXTURE_PIXELS = 96_000_000L;
+    private static final long LOAD_RETRY_COOLDOWN_NANOS = 5_000_000_000L;
     private static final double DRAW_DISTANCE = 256.0;
     private static final List<Identifier> TEXTURES = new ArrayList<>();
     private static final Set<Integer> ACTIVE_MAP_SKATERS = ConcurrentHashMap.newKeySet();
@@ -58,6 +59,8 @@ public final class SkateMapModel {
     private static volatile String attemptedFilename;
     private static volatile String loadingFilename;
     private static volatile UploadTask uploadTask;
+    private static volatile boolean loadInProgress;
+    private static volatile long retryAfterNanos;
     private static long loadGeneration;
 
     private SkateMapModel() {}
@@ -94,8 +97,11 @@ public final class SkateMapModel {
         final String requiredPropsSha256 = expectedPropsSha256 == null ? "" : expectedPropsSha256;
         if (isReadyFor(request, requiredMapSha256, requiredPropsSha256)) return;
         String attemptKey = (request == null ? "" : request.toLowerCase(Locale.ROOT)) + ":" + requiredMapSha256 + ":" + requiredPropsSha256;
-        if (Objects.equals(attemptedFilename, attemptKey)) return;
+        if (Objects.equals(attemptedFilename, attemptKey)
+                && (loadInProgress || System.nanoTime() - retryAfterNanos < 0L)) return;
         attemptedFilename = attemptKey;
+        loadInProgress = true;
+        retryAfterNanos = 0L;
         long generation = ++loadGeneration;
         loadingFilename = null;
         releaseModel();
@@ -104,12 +110,14 @@ public final class SkateMapModel {
         Path maps = root.resolve("maps");
         if (!Files.isDirectory(maps)) {
             LOGGER.info("No converted Skate district maps at {}; district rendering is unavailable", maps);
+            markLoadFailure();
             return;
         }
         try {
             Path selected = request == null ? selectMap(root, maps) : selectMapByFilename(request, maps);
             if (selected == null) {
                 LOGGER.info("No converted Skate district map was found at {}", maps);
+                markLoadFailure();
                 return;
             }
             long maximumPackageBytes = Math.min(MAX_MAP_BYTES, Runtime.getRuntime().maxMemory() / 2);
@@ -157,6 +165,7 @@ public final class SkateMapModel {
                 loadingFilename = null;
                 if (error != null) {
                     releaseModel();
+                    markLoadFailure();
                     Throwable cause = error instanceof CompletionException && error.getCause() != null
                             ? error.getCause() : error;
                     LOGGER.error("Could not load the converted Skate district from {}", maps, cause);
@@ -166,14 +175,21 @@ public final class SkateMapModel {
                     beginUpload(client, parsed, generation);
                 } catch (Exception installError) {
                     releaseModel();
+                    markLoadFailure();
                     LOGGER.error("Could not upload the converted Skate district from {}", maps, installError);
                 }
             }));
         } catch (Exception error) {
             releaseModel();
             loadingFilename = null;
+            markLoadFailure();
             LOGGER.error("Could not load the converted Skate district from {}", maps, error);
         }
+    }
+
+    private static void markLoadFailure() {
+        loadInProgress = false;
+        retryAfterNanos = System.nanoTime() + LOAD_RETRY_COOLDOWN_NANOS;
     }
 
     private static void verifyCatalog(Path root, String filename, byte[] file) throws IOException {
@@ -396,12 +412,14 @@ public final class SkateMapModel {
                     List.copyOf(primitives), sky);
             uploadTask = null;
             loadingFilename = null;
+            loadInProgress = false;
             LOGGER.info("Loaded Skate district {} with {} material groups",
                     task.parsed.filename, model.primitives.size());
         } catch (Exception installError) {
             uploadTask = null;
             loadingFilename = null;
             releaseModel();
+            markLoadFailure();
             LOGGER.error("Could not upload the converted Skate district", installError);
         }
     }
@@ -444,6 +462,8 @@ public final class SkateMapModel {
     static void close() {
         loadGeneration++;
         loadingFilename = null;
+        loadInProgress = false;
+        retryAfterNanos = 0L;
         releaseModel();
         ACTIVE_MAP_SKATERS.clear();
         attemptedFilename = null;
