@@ -47,10 +47,16 @@ jobs:
           test -n "$client_jar"
           cp "$client_jar" dist/pex-skate-client-26.3.jar
           cp release/INSTALL.md dist/INSTALL.md
+          cp LICENSE vendor/NOTICE.md dist/
+          cp vendor/pumpkin-plugin-api/LICENSE-APACHE dist/LICENSE-PEX-API-APACHE
+          cp vendor/pumpkin-plugin-api/LICENSE-MIT dist/LICENSE-PEX-API-MIT
+          cp vendor/pumpkin-plugin-wit/LICENSE-PEX dist/LICENSE-PEX-WIT
+          cp vendor/skate-engine/LICENSE dist/LICENSE-SKATE-ENGINE
+          cp vendor/skate-engine/NOTICE-mashup dist/NOTICE-SKATE-ENGINE
           (cd dist && sha256sum pex-skate.wasm pex-skate-client-26.3.jar > SHA256SUMS)
-          (cd dist && zip -j PEX-Skate-26.3.zip pex-skate.wasm pex-skate-client-26.3.jar SHA256SUMS INSTALL.md)
+          (cd dist && zip -j PEX-Skate-26.3.zip pex-skate.wasm pex-skate-client-26.3.jar SHA256SUMS INSTALL.md LICENSE NOTICE.md LICENSE-PEX-API-APACHE LICENSE-PEX-API-MIT LICENSE-PEX-WIT LICENSE-SKATE-ENGINE NOTICE-SKATE-ENGINE)
           (cd dist && sha256sum --check SHA256SUMS)
-          test "$(unzip -Z1 dist/PEX-Skate-26.3.zip | sort | tr '\n' ' ')" = "INSTALL.md SHA256SUMS pex-skate-client-26.3.jar pex-skate.wasm "
+          test "$(unzip -Z1 dist/PEX-Skate-26.3.zip | sort | tr '\n' ' ')" = "INSTALL.md LICENSE LICENSE-PEX-API-APACHE LICENSE-PEX-API-MIT LICENSE-PEX-WIT LICENSE-SKATE-ENGINE NOTICE.md NOTICE-SKATE-ENGINE SHA256SUMS pex-skate-client-26.3.jar pex-skate.wasm "
       - uses: actions/upload-artifact@v7
         with:
           name: pex-skate-26.3

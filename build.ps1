@@ -46,12 +46,24 @@ try {
     Set-Content -LiteralPath (Join-Path $outputDir "SHA256SUMS") -Value $checksums -Encoding ascii
 
     Copy-Item -LiteralPath (Join-Path $repoRoot "release\INSTALL.md") -Destination (Join-Path $outputDir "INSTALL.md") -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $outputDir "LICENSE") -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot "vendor\NOTICE.md") -Destination (Join-Path $outputDir "NOTICE.md") -Force
+    $bundledNotices = @{
+        "LICENSE-PEX-API-APACHE" = "vendor\pumpkin-plugin-api\LICENSE-APACHE"
+        "LICENSE-PEX-API-MIT" = "vendor\pumpkin-plugin-api\LICENSE-MIT"
+        "LICENSE-PEX-WIT" = "vendor\pumpkin-plugin-wit\LICENSE-PEX"
+        "LICENSE-SKATE-ENGINE" = "vendor\skate-engine\LICENSE"
+        "NOTICE-SKATE-ENGINE" = "vendor\skate-engine\NOTICE-mashup"
+    }
+    foreach ($notice in $bundledNotices.GetEnumerator()) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot $notice.Value) -Destination (Join-Path $outputDir $notice.Key) -Force
+    }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $bundlePath = Join-Path $outputDir "PEX-Skate-26.3.zip"
     if (Test-Path -LiteralPath $bundlePath) { Remove-Item -LiteralPath $bundlePath -Force }
     $archive = [System.IO.Compression.ZipFile]::Open($bundlePath, [System.IO.Compression.ZipArchiveMode]::Create)
     try {
-        foreach ($fileName in @("pex-skate.wasm", "pex-skate-client-26.3.jar", "SHA256SUMS", "INSTALL.md")) {
+        foreach ($fileName in @("pex-skate.wasm", "pex-skate-client-26.3.jar", "SHA256SUMS", "INSTALL.md", "LICENSE", "NOTICE.md") + @($bundledNotices.Keys)) {
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                 $archive,
                 (Join-Path $outputDir $fileName),
@@ -62,7 +74,7 @@ try {
     } finally {
         $archive.Dispose()
     }
-    $expectedEntries = @("pex-skate.wasm", "pex-skate-client-26.3.jar", "SHA256SUMS", "INSTALL.md") | Sort-Object
+    $expectedEntries = @("pex-skate.wasm", "pex-skate-client-26.3.jar", "SHA256SUMS", "INSTALL.md", "LICENSE", "NOTICE.md") + @($bundledNotices.Keys) | Sort-Object
     $checkArchive = [System.IO.Compression.ZipFile]::OpenRead($bundlePath)
     try {
         $actualEntries = @($checkArchive.Entries | ForEach-Object FullName | Sort-Object)

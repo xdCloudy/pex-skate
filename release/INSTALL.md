@@ -1,6 +1,6 @@
 # PEX Skate 26.3 installation
 
-This bundle contains a server component and a client companion. Install both for the full skating experience.
+This bundle contains a server component, a client companion, checksums, and the project and vendored-source license notices. Install both mods for the full skating experience.
 
 ## Server
 
@@ -18,4 +18,4 @@ Install Fabric Loader, Fabric API, and `pex-skate-client-26.3.jar` on each Java 
 
 Join the server and press **G** to toggle Skate mode. Use **W** or **Space** to push, **Shift** for a left-foot push, **S** to brake, **A/D** to steer, **F** to get on/off the board, **Q/E** to grab, and the arrow keys for trick flicks. Standard mapped gamepads use **A** for right-foot push, **X** for left-foot push, **B** to brake, **Y** to get on/off the board, the left stick for movement/steering, and the right stick for trick flicks. Press **G** again to exit. See the repository README for the full keyboard/gamepad mapping and unsupported SkateGM controls.
 
-Verify downloaded files with `SHA256SUMS`. Gameplay remains experimental and requires user-provided converted game data; see the project README for the validation boundary and known limitations.
+Verify the server and client files with `SHA256SUMS`. `LICENSE`, `NOTICE.md`, and the `LICENSE-*`/`NOTICE-*` files preserve the project and vendored-source licenses and attribution. Gameplay remains experimental and requires user-provided converted game data; see the project README for the validation boundary and known limitations.
