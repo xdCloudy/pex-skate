@@ -41,7 +41,7 @@ python -m unittest discover -s tools/skategm-exporter/tests -v
 - `INSTALL.md` — quick install steps for the bundled files
 - `SHA256SUMS` — checksums for both files
 
-GitHub releases also include `PEX-Skate-ISO-Setup-Windows.zip`, with the portable ISO converter and picker-based data installer. CI builds it from the vendored source. To build the converter locally, use Python 3.13+, Rust, and the pinned requirements in `tools/skategm-exporter/tools/requirements-setup.txt`, then run `tools/skategm-exporter/build.ps1 -Out <folder>`.
+GitHub releases also include `PEX-Skate-ISO-Setup-Windows.zip`, with the portable ISO converter and picker-based data installer, and `RELEASE-SHA256SUMS`, which covers every file attached to that release, including both ZIPs. Verify a downloaded release asset against that manifest; `SHA256SUMS` inside `PEX-Skate-26.3.zip` separately verifies the WASM and Fabric client JAR. CI builds the Windows setup helper from vendored source. To build the converter locally, use Python 3.13+, Rust, and the pinned requirements in `tools/skategm-exporter/tools/requirements-setup.txt`, then run `tools/skategm-exporter/build.ps1 -Out <folder>`.
 
 To build only the Fabric companion, run `client/gradlew.bat build` from the repository root. The jar is in `client/build/libs/`.
 
