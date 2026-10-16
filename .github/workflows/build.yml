@@ -33,7 +33,10 @@ jobs:
         run: |
           mkdir -p dist
           cp target/wasm32-wasip2/release/pex_skate.wasm dist/pex-skate.wasm
-          cp client/build/libs/pex-skate-client-0.1.0-alpha.2.jar dist/pex-skate-client-26.3.jar
+          client_jar=$(find client/build/libs -maxdepth 1 -type f -name 'pex-skate-client-*.jar' ! -name '*-sources.jar' -print -quit)
+          test -n "$client_jar"
+          cp "$client_jar" dist/pex-skate-client-26.3.jar
+          sha256sum dist/pex-skate.wasm dist/pex-skate-client-26.3.jar > dist/SHA256SUMS
       - uses: actions/upload-artifact@v7
         with:
           name: pex-skate-26.3

@@ -1,4 +1,5 @@
 /target/
+**/target/
 /dist/
 /_research/
 /client/.gradle/

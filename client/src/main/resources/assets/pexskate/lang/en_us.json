@@ -1,4 +1,8 @@
 {
   "key.pexskate.toggle": "Toggle Skate Mode",
+  "key.pexskate.flick_left": "Skate Flick Left",
+  "key.pexskate.flick_right": "Skate Flick Right",
+  "key.pexskate.flick_up": "Skate Flick Up",
+  "key.pexskate.flick_down": "Skate Flick Down",
   "key.category.pexskate.controls": "PEX Skate"
 }

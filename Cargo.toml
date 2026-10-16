@@ -1,6 +1,6 @@
 [package]
 name = "pex-skate"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 edition = "2024"
 publish = false
 description = "A portable PEX server plugin for the experimental PEX Skate client/server bridge."
@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pumpkin-plugin-api = { path = "vendor/pumpkin-plugin-api" }
+skate-host = { path = "vendor/skate-engine/crates/skate-host" }
 
 [package.metadata.component]
 package = "pexskate:server"

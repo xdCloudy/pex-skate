@@ -1,0 +1,10 @@
+[package]
+name = "skate-core-recovered"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-only"
+description = "Engine-independent Skate 3 recovered calculations"
+
+[lib]
+path = "src/lib.rs"
