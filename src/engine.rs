@@ -8,8 +8,10 @@ use skate_host::bridge::{self, Session};
 use std::path::Path;
 use std::{fs, io::ErrorKind};
 
-const PROP_COLLISION_MAGIC: &[u8; 8] = b"PEXCOL1\0";
+const PROP_COLLISION_BOX_MAGIC: &[u8; 8] = b"PEXCOL1\0";
+const PROP_COLLISION_MESH_MAGIC: &[u8; 8] = b"PEXCOL2\0";
 const MAX_PROP_COLLISION_BOXES: usize = 8192;
+const MAX_PROP_COLLISION_TRIANGLES: usize = 250_000;
 
 pub const SKATER_BONE_NAMES: [&str; 36] = [
     "TRAJECTORY",
@@ -129,11 +131,7 @@ impl SkateSession {
         match load_prop_collision(&prop_collision_path) {
             Ok(triangles) if !triangles.is_empty() => {
                 let count = session.set_moving_collision(triangles)?;
-                eprintln!(
-                    "PEX_SKATE_PROP_COLLISION boxes={} triangles={}",
-                    count / 12,
-                    count
-                );
+                eprintln!("PEX_SKATE_PROP_COLLISION triangles={count}");
             }
             Ok(_) => {}
             Err(error) => eprintln!("PEX_SKATE_PROP_COLLISION skipped: {error}"),
@@ -320,31 +318,77 @@ fn load_prop_collision(path: &Path) -> Result<Vec<[[f32; 3]; 3]>, String> {
 }
 
 fn parse_prop_collision(bytes: &[u8]) -> Result<Vec<[[f32; 3]; 3]>, String> {
-    if bytes.len() < 12 || &bytes[..8] != PROP_COLLISION_MAGIC {
+    if bytes.len() < 12 {
         return Err("invalid PEX prop collision header".into());
     }
     let count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    if count > MAX_PROP_COLLISION_BOXES || bytes.len() != 12 + count * 24 {
-        return Err("invalid PEX prop collision box count or package length".into());
-    }
-    let mut triangles = Vec::with_capacity(count * 12);
-    for record in bytes[12..].chunks_exact(24) {
-        let mut values = [0.0f32; 6];
-        for (index, bytes) in record.chunks_exact(4).enumerate() {
-            values[index] = f32::from_le_bytes(bytes.try_into().unwrap());
+    if &bytes[..8] == PROP_COLLISION_BOX_MAGIC {
+        if count > MAX_PROP_COLLISION_BOXES || bytes.len() != 12 + count * 24 {
+            return Err("invalid PEX prop collision box count or package length".into());
         }
-        let lower = [values[0], values[1], values[2]];
-        let upper = [values[3], values[4], values[5]];
-        if values.iter().any(|value| !value.is_finite())
-            || (0..3)
-                .any(|axis| upper[axis] - lower[axis] < 0.04 || upper[axis] - lower[axis] > 128.0)
+        let mut triangles = Vec::with_capacity(count * 12);
+        for record in bytes[12..].chunks_exact(24) {
+            let mut values = [0.0f32; 6];
+            for (index, bytes) in record.chunks_exact(4).enumerate() {
+                values[index] = f32::from_le_bytes(bytes.try_into().unwrap());
+            }
+            let lower = [values[0], values[1], values[2]];
+            let upper = [values[3], values[4], values[5]];
+            if values.iter().any(|value| !value.is_finite())
+                || (0..3).any(|axis| {
+                    upper[axis] - lower[axis] < 0.04 || upper[axis] - lower[axis] > 128.0
+                })
+            {
+                return Err(format!(
+                    "invalid PEX prop collision bounds in box {}",
+                    triangles.len() / 12
+                ));
+            }
+            triangles.extend(box_triangles(lower, upper));
+        }
+        return Ok(triangles);
+    }
+    if &bytes[..8] != PROP_COLLISION_MESH_MAGIC
+        || count > MAX_PROP_COLLISION_TRIANGLES
+        || bytes.len() != 12 + count * 36
+    {
+        return Err("invalid PEX prop collision triangle count or package length".into());
+    }
+    let mut triangles = Vec::with_capacity(count);
+    for record in bytes[12..].chunks_exact(36) {
+        let mut triangle = [[0.0f32; 3]; 3];
+        for (index, value_bytes) in record.chunks_exact(4).enumerate() {
+            triangle[index / 3][index % 3] = f32::from_le_bytes(value_bytes.try_into().unwrap());
+        }
+        let [a, b, c] = triangle;
+        if triangle.iter().flatten().any(|value| !value.is_finite())
+            || triangle
+                .iter()
+                .any(|point| point.iter().any(|value| value.abs() > 1_000_000.0))
         {
             return Err(format!(
-                "invalid PEX prop collision bounds in box {}",
-                triangles.len() / 12
+                "invalid PEX prop collision vertex in triangle {}",
+                triangles.len()
             ));
         }
-        triangles.extend(box_triangles(lower, upper));
+        let edge =
+            |from: [f32; 3], to: [f32; 3]| [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+        let ab = edge(a, b);
+        let ac = edge(a, c);
+        let bc = edge(b, c);
+        let length = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        let cross = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        if length(ab).max(length(ac)).max(length(bc)) > 128.0 || length(cross) <= 1.0e-6 {
+            return Err(format!(
+                "invalid PEX prop collision triangle {}",
+                triangles.len()
+            ));
+        }
+        triangles.push(triangle);
     }
     Ok(triangles)
 }
@@ -554,5 +598,33 @@ mod tests {
         bytes.extend([0]);
         assert!(parse_prop_collision(&bytes).is_err());
         assert_eq!(box_triangles([0.0; 3], [1.0; 3]).len(), 12);
+    }
+
+    #[test]
+    fn prop_collision_mesh_package_preserves_authored_triangles() {
+        let triangle = [[0.0f32, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 3.0, 0.0]];
+        let mut bytes = b"PEXCOL2\0".to_vec();
+        bytes.extend(1u32.to_le_bytes());
+        for value in triangle.into_iter().flatten() {
+            bytes.extend(value.to_le_bytes());
+        }
+        assert_eq!(parse_prop_collision(&bytes).unwrap(), vec![triangle]);
+    }
+
+    #[test]
+    fn prop_collision_mesh_package_rejects_degenerate_and_oversized_triangles() {
+        let mut bytes = b"PEXCOL2\0".to_vec();
+        bytes.extend(1u32.to_le_bytes());
+        for value in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0] {
+            bytes.extend(value.to_le_bytes());
+        }
+        assert!(parse_prop_collision(&bytes).is_err());
+        bytes.clear();
+        bytes.extend(b"PEXCOL2\0");
+        bytes.extend(1u32.to_le_bytes());
+        for value in [0.0f32, 0.0, 0.0, 129.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+            bytes.extend(value.to_le_bytes());
+        }
+        assert!(parse_prop_collision(&bytes).is_err());
     }
 }

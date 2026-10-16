@@ -17,6 +17,8 @@ import numpy as np
 from .map_writer import write
 from tools.owned_game.big import BigArchive
 
+MAX_PROP_COLLISION_TRIANGLES = 250_000
+
 
 def sections(raw):
     if raw[:7] != b'\x89RW4xb2':
@@ -132,6 +134,46 @@ def collision_bounds(arrays, meshes):
     return [lower.tolist(), upper.tolist()]
 
 
+def collision_triangles(arrays, meshes):
+    """Return bounded world-space collision faces from opaque authored meshes."""
+    parts = []
+    count = 0
+    for mesh in meshes:
+        # Cutout foliage and blended meshes often consist of thin visual cards;
+        # treating those as solid would make authored vegetation unskateable.
+        if mesh.get('alpha_mode', 0) != 0:
+            continue
+        index = mesh['index']
+        vertices = arrays.get(f'vertices_{index}')
+        faces = arrays.get(f'faces_{index}')
+        if vertices is None or faces is None or not len(faces):
+            continue
+        vertices = np.asarray(vertices, dtype=np.float32)
+        faces = np.asarray(faces)
+        if vertices.ndim != 2 or vertices.shape[1] != 3 or faces.ndim != 2 or faces.shape[1] != 3:
+            raise ValueError('Invalid authored prop collision mesh dimensions')
+        if len(faces) > MAX_PROP_COLLISION_TRIANGLES - count:
+            return None
+        if not np.issubdtype(faces.dtype, np.integer):
+            if not np.isfinite(faces).all() or not np.equal(faces, np.floor(faces)).all():
+                raise ValueError('Non-integer authored prop collision index')
+        faces = faces.astype(np.int64, copy=False)
+        if faces.min() < 0 or faces.max() >= len(vertices):
+            raise ValueError('Authored prop collision index is out of range')
+        triangles = vertices[faces]
+        if not np.isfinite(triangles).all() or np.max(np.abs(triangles)) > 1_000_000.0:
+            raise ValueError('Invalid authored prop collision vertex')
+        edges = triangles[:, [1, 2, 0]] - triangles
+        edge_lengths = np.linalg.norm(edges, axis=2)
+        area2 = np.linalg.norm(np.cross(edges[:, 0], edges[:, 1]), axis=1)
+        usable = (np.max(edge_lengths, axis=1) <= 128.0) & (area2 > 1e-6)
+        triangles = np.ascontiguousarray(triangles[usable], dtype='<f4')
+        if len(triangles):
+            parts.append(triangles)
+            count += len(triangles)
+    return np.concatenate(parts, axis=0) if parts else np.empty((0, 3, 3), dtype='<f4')
+
+
 def write_collision_boxes(path, instances):
     boxes = [item['collision_bounds'] for item in instances if 'collision_bounds' in item]
     if len(boxes) > 8_192:
@@ -154,6 +196,30 @@ def write_collision_boxes(path, instances):
     finally:
         temporary.unlink(missing_ok=True)
     return len(boxes)
+
+
+def write_collision_triangles(path, triangles):
+    count = sum(len(part) for part in triangles)
+    if count > MAX_PROP_COLLISION_TRIANGLES:
+        path.unlink(missing_ok=True)
+        return 0
+    temporary = path.with_suffix(path.suffix + '.new')
+    try:
+        with temporary.open('wb') as output:
+            output.write(struct.pack('<8sI', b'PEXCOL2\0', count))
+            for part in triangles:
+                values = np.asarray(part, dtype='<f4')
+                if values.ndim != 3 or values.shape[1:] != (3, 3) or not np.isfinite(values).all():
+                    raise ValueError('Invalid authored prop collision triangles')
+                output.write(values.tobytes(order='C'))
+        if count:
+            temporary.replace(path)
+        else:
+            temporary.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return count
 
 
 def catalog(cache_roots):
@@ -230,7 +296,8 @@ def export(manifest_path, cache_roots, output, *, catalog_path=None):
             placements[key] = item
     report = dict(map=district['map_name'], instances=[], unresolved=[], simulation='initial placement only')
     with tempfile.TemporaryDirectory(prefix='skate-dmo-') as work:
-        root = Path(work); models = []; used = set()
+        root = Path(work); models = []; used = set(); collision_meshes = []
+        collision_triangle_count = 0; collision_fallback = False
         for number, item in enumerate(placements.values()):
             template = templates.get(item['template_id'])
             if template is None:
@@ -249,6 +316,22 @@ def export(manifest_path, cache_roots, output, *, catalog_path=None):
             if bounds is not None:
                 instance['collision_bounds'] = bounds
             report['instances'].append(instance)
+            if not collision_fallback:
+                mesh_triangles = collision_triangles(arrays, meshes)
+                if mesh_triangles is None:
+                    if bounds is not None:
+                        collision_fallback = True
+                        collision_meshes.clear()
+                        collision_triangle_count = 0
+                elif not len(mesh_triangles):
+                    continue
+                elif collision_triangle_count + len(mesh_triangles) > MAX_PROP_COLLISION_TRIANGLES:
+                    collision_fallback = True
+                    collision_meshes.clear()
+                    collision_triangle_count = 0
+                else:
+                    collision_meshes.append(mesh_triangles)
+                    collision_triangle_count += len(mesh_triangles)
         if models:
             manifest = dict(map_name=district['map_name'], district_name=district['district_name'],
                 models=models, textures={key:textures[key] for key in sorted(used)},
@@ -261,7 +344,12 @@ def export(manifest_path, cache_roots, output, *, catalog_path=None):
                 temporary.replace(output)
             finally:
                 temporary.unlink(missing_ok=True)
-            report['collision_boxes'] = write_collision_boxes(output.with_suffix('.collision'), report['instances'])
+            collision_path = output.with_suffix('.collision')
+            if collision_fallback:
+                report['collision_boxes'] = write_collision_boxes(collision_path, report['instances'])
+                report['collision_fallback'] = 'district bounds used because mesh collision exceeded conversion limits'
+            else:
+                report['collision_triangles'] = write_collision_triangles(collision_path, collision_meshes)
         else:
             output.unlink(missing_ok=True)
             output.with_suffix('.collision').unlink(missing_ok=True)

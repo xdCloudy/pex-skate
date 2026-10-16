@@ -8,7 +8,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.asset_pipeline.install import prop_manifest_entry
-from tools.asset_pipeline.dynamic_props import collision_bounds, write_collision_boxes
+from tools.asset_pipeline.dynamic_props import (
+    collision_bounds,
+    collision_triangles,
+    write_collision_boxes,
+    write_collision_triangles,
+)
 
 
 class PropCatalogTests(unittest.TestCase):
@@ -40,6 +45,36 @@ class PropCatalogTests(unittest.TestCase):
             'vertices_1': np.array([[-1, 0, 1], [2, 3, 4]], dtype='f4'),
         }
         self.assertEqual(collision_bounds(arrays, meshes), [[-1.0, 0.0, 1.0], [2.0, 3.0, 4.0]])
+
+    def test_opaque_prop_collision_uses_transformed_mesh_triangles(self):
+        meshes = [{'index': 0, 'alpha_mode': 0}]
+        arrays = {
+            'vertices_0': np.array([[1, 2, 3], [4, 2, 3], [1, 5, 3]], dtype='f4'),
+            'faces_0': np.array([[0, 1, 2]], dtype='u4'),
+        }
+        np.testing.assert_array_equal(
+            collision_triangles(arrays, meshes),
+            np.array([[[1, 2, 3], [4, 2, 3], [1, 5, 3]]], dtype='f4'),
+        )
+
+    def test_cutout_and_degenerate_prop_faces_are_not_solid_collision(self):
+        arrays = {
+            'vertices_0': np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0]], dtype='f4'),
+            'faces_0': np.array([[0, 1, 2]], dtype='u4'),
+            'vertices_1': np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype='f4'),
+            'faces_1': np.array([[0, 1, 2]], dtype='u4'),
+        }
+        self.assertEqual(len(collision_triangles(arrays, [{'index': 0, 'alpha_mode': 0}])), 0)
+        self.assertEqual(len(collision_triangles(arrays, [{'index': 1, 'alpha_mode': 1}])), 0)
+
+    def test_collision_mesh_package_has_bounded_triangle_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'University.collision'
+            triangles = [np.array([[[1, 2, 3], [4, 2, 3], [1, 5, 3]]], dtype='f4')]
+            self.assertEqual(write_collision_triangles(path, triangles), 1)
+            data = path.read_bytes()
+            self.assertEqual(struct.unpack('<8sI', data[:12]), (b'PEXCOL2\0', 1))
+            self.assertEqual(struct.unpack('<9f', data[12:]), (1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 1.0, 5.0, 3.0))
 
     def test_collision_package_has_bounded_binary_bounds_records(self):
         with tempfile.TemporaryDirectory() as directory:
