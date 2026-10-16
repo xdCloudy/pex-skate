@@ -27,5 +27,5 @@ New-Item -ItemType Directory -Force $licenses | Out-Null
 Copy-Item "$here/tools/vendor/utt/LICENSE" "$licenses/UTT.txt"
 Copy-Item "$here/tools/vendor/university/LICENSE-PROJECT.md" "$licenses/CustomEngineLayer.txt"
 Copy-Item "$here/tools/vendor/skate3_ui/LICENSE" "$licenses/skate3_ui.txt"
-Copy-Item "$here/../LICENSE-THIRD-PARTY.md" "$licenses/README.md"
+Copy-Item "$here/LICENSE-THIRD-PARTY.md" "$licenses/README.md"
 Write-Host "built $Out/skategm-convert.exe"

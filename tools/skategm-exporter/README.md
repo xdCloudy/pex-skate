@@ -1,12 +1,13 @@
 # Skate 3 data exporter
 
-Turns a player's own extracted Skate 3 (Xbox 360) game folder into the data
+Turns a player's own Skate 3 (Xbox 360) ISO or extracted game folder into the data
 folder the gm_skategm module reads (`<out>/assets`, holding `private/`): animation
 banks, state graphs, input and physics settings, the skater collections and
 physics skeletons, and the skater model.
 
-Nothing is downloaded and nothing from the game is included here: it reads the
-files you point it at.
+The ISO mode reads the required files from the disc image into a temporary
+folder, converts them, then removes that temporary extraction. Nothing is
+downloaded by the exporter and no game files are included here.
 
 ## Use
 
@@ -17,8 +18,9 @@ python tools/skategm-exporter/convert.py --xex "D:/Games/Skate 3.iso" --out C:/p
 ```
 
 `--xex` accepts either a dumped Xbox 360 ISO or `default.xex` beside the game's
-`data/` folder. The ISO path reads the required files directly from the disc
-image without extracting a full copy first. Progress goes to the console and
+`data/` folder. The ISO path extracts only the required disc paths into a
+temporary folder, not a full copy. Copy `<out>/assets/private/` to the PEX
+Skate plugin data folder after conversion. Progress goes to the console and
 the generated `<out>/conversion.log`. For speed, build the native RefPack
 decoder first (otherwise a slower Python decoder is used):
 

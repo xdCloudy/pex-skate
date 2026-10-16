@@ -162,7 +162,7 @@ public final class PexSkateClient implements ClientModInitializer {
 
         Gamepad pad = readGamepad();
         int flags = 0;
-        if (client.options.keySprint.isDown() || client.options.keyUp.isDown() || client.options.keyJump.isDown()
+        if (client.options.keyUp.isDown() || client.options.keyJump.isDown()
                 || pad.pushRight()) flags |= 1;
         if (client.options.keyShift.isDown() || pad.pushLeft()) flags |= 2;
         if (client.options.keyDown.isDown() || pad.brake()) flags |= 4;

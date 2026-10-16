@@ -46,20 +46,23 @@ To build only the Fabric companion, run `client/gradlew.bat build` from the repo
 
 ### One-click ISO conversion on Windows
 
-1. Download and extract `PEX-Skate-ISO-Setup-Windows.zip` from the [GitHub releases](https://github.com/xdCloudy/pex-skate/releases).
-2. Run `Install-PEXSkateData.bat`. Select your legally obtained Skate 3 Xbox 360 `.iso`, then select the PEX Skate plugin data folder. The normal folder is `<server>/plugins/data/pex-skate/`; start PEX once first so its plugin folders exist.
-3. The bundled converter reads only the files it needs from the ISO, converts them on your PC, checks for required output files, then installs the generated `private/` asset tree. If converted assets already exist, it asks before replacing them. It keeps other files in the selected folder and writes `conversion.log` for troubleshooting.
-4. Restart the server. The plugin data root should now include `private/game.json`, `private/stock/skater-collections.json`, `private/stock/data/config/input.cfg`, and `private/skater.glb`. `/skate` reports a readable error if required data is missing.
+1. Install the PEX plugin on the server and start it once so the `plugins/data/pex-skate/` folder is created. Stop the server.
+2. Download and extract `PEX-Skate-ISO-Setup-Windows.zip` from the [GitHub releases](https://github.com/xdCloudy/pex-skate/releases).
+3. Run `Install-PEXSkateData.bat`. Select your legally obtained Skate 3 Xbox 360 `.iso`, then select `<server>/plugins/data/pex-skate/`. If the server is remote, run the helper on a machine with access to that folder, use a mounted server directory, or copy the generated `private/` folder to the server afterward.
+4. The bundled converter reads the needed files directly from the ISO and converts them locally. It checks required outputs before installing the generated `private/` asset tree. If converted assets already exist, it asks before replacing them. Other files in the selected folder are kept, and `conversion.log` is written for troubleshooting.
+5. Start or restart the server. The plugin data root should now include `private/game.json`, `private/stock/skater-collections.json`, `private/stock/data/config/input.cfg`, and `private/skater.glb`. `/skate` reports a readable error if required data is missing.
 
 The ISO, extracted temporary files, and converted game data stay on your machine. Nothing is uploaded or included in GitHub releases. The setup tool is based on [SkateGM's ISO-aware exporter](https://github.com/the-schwilliam/SkateGM), pinned and licensed in `tools/skategm-exporter/`; its standalone `.exe` runs without a separate Python installation. The release setup ZIP includes the corresponding exporter source. This setup currently targets Windows; Linux/macOS users can follow `tools/skategm-exporter/README.md` and install its Python requirements.
 
-The converter reads `default.xex`, animation files, `miscload.big`, `miscboot.big`, `db.big`, and `createacharacter.big` directly from the ISO; it also reads the trick-display archives when present. It converts the gameplay graphs/input settings, animation banks, physics skeleton, skater collections, and default skater model used by the engine. It does not install Skate 3 maps, music, or sounds. The helper needs access to the PEX data folder: run it on the server machine, use a mounted server directory, or copy the generated `private/` folder to a remote server after conversion.
+The converter reads `default.xex`, animation files, `miscload.big`, `miscboot.big`, `db.big`, and `createacharacter.big` directly from the ISO; it also reads the trick-display archives when present. It copies only those required disc paths into a temporary folder, converts the gameplay graphs/input settings, animation banks, physics skeleton, skater collections, and default skater model, then deletes the temporary extraction. It does not install Skate 3 maps, music, or sounds. The helper needs access to the PEX data folder: run it on the server machine, use a mounted server directory, or copy the generated `private/` folder to a remote server after conversion.
+
+For a manual conversion on Windows, macOS, or Linux, install Python 3.13+, NumPy, and Pillow, then run `python tools/skategm-exporter/convert.py --xex <path-to-your.iso> --out <output-folder>`. On success, `<output-folder>/assets/private/` contains the generated game data and `conversion.log` records the conversion. Copy that `private/` directory into the PEX Skate plugin data folder. The source exporter also accepts `default.xex` from an already extracted game folder. See [`tools/skategm-exporter/README.md`](tools/skategm-exporter/README.md) for requirements and the optional native decoder build.
 
 ## Install and use
 
-1. Convert your Skate 3 ISO directly into `plugins/data/pex-skate/` as described above. On other platforms, use the vendored source exporter.
-2. Put `dist/pex-skate.wasm` in the plugin directory configured by PEX and start the server.
-3. Install the Fabric client jar and Fabric API on every player client.
+1. Put `dist/pex-skate.wasm` in the plugin directory configured by PEX and start the server once to create the plugin data folder.
+2. Install the Fabric client jar and Fabric API on every player client.
+3. Stop the server, convert the ISO into `plugins/data/pex-skate/` using the steps above, then restart the server.
 4. Join the server and press **G** to toggle Skate mode on the client and server. Press **G** again to turn it off.
 5. Use **W** or **Space** for a right-foot push, **Shift** for a left-foot push, **S** to brake, and **A/D** to steer. The arrow keys are the right-stick Flick-It directions; customize them under Controls → PEX Skate. A standard mapped gamepad uses **A/X/B** for right-foot push/left-foot push/brake, the left stick for pumping/steering, and the right stick for tricks.
 
