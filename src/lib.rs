@@ -2,6 +2,7 @@ mod collision;
 mod engine;
 mod physics;
 
+use collision::CollisionScan;
 use engine::{SkatePose, SkateSession};
 use physics::Controls;
 use pumpkin_plugin_api::{
@@ -26,6 +27,7 @@ const INPUT_TIMEOUT: Duration = Duration::from_millis(250);
 const STATE_BROADCAST_INTERVAL: Duration = Duration::from_millis(50);
 const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
 const COLLISION_REFRESH_VERTICAL_DISTANCE: f32 = 3.0;
+const COLLISION_BLOCKS_PER_MOVEMENT: usize = 1_024;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -42,6 +44,7 @@ struct ServerState {
     engine_updated_at: HashMap<String, Instant>,
     last_broadcast_at: HashMap<String, Instant>,
     collision_center: HashMap<String, (f32, f32, f32)>,
+    collision_scans: HashMap<String, CollisionScan>,
 }
 
 impl ServerState {
@@ -136,6 +139,7 @@ impl CommandHandler for ToggleSkate {
                 state.engine_updated_at.remove(&name);
                 state.last_broadcast_at.remove(&name);
                 state.collision_center.remove(&name);
+                state.collision_scans.remove(&name);
                 true
             } else if !state.pending_loads.insert(name.clone()) {
                 sender.send_message(TextComponent::text(
@@ -296,6 +300,7 @@ impl EventHandler<pumpkin_plugin_api::events::player::PlayerLeaveEvent> for Skat
             state.engine_updated_at.remove(&name);
             state.last_broadcast_at.remove(&name);
             state.collision_center.remove(&name);
+            state.collision_scans.remove(&name);
         }
         broadcast_state(&server, entity_id, position, yaw, 0.0, false);
         event
@@ -370,6 +375,7 @@ impl EventHandler<PlayerMoveEvent> for SkateMovement {
                 state.engine_updated_at.remove(&name);
                 state.last_broadcast_at.remove(&name);
                 state.collision_center.remove(&name);
+                state.collision_scans.remove(&name);
                 event.to_position = event.from_position;
                 let position = event.from_position;
                 let yaw = event.player.get_yaw();
@@ -408,66 +414,109 @@ impl EventHandler<PlayerMoveEvent> for SkateMovement {
         }
         let entity_id = event.player.as_entity().get_id();
         drop(state);
-        if should_refresh_collision {
-            let world = event.player.as_entity().get_world();
-            let refreshed = collision::around_player(
-                &world,
-                (
-                    f64::from(pose.root[0]),
-                    f64::from(pose.root[1]),
-                    f64::from(pose.root[2]),
-                ),
-            )
-            .and_then(|local| {
-                if local.triangles.is_empty() {
-                    return Err("Minecraft returned no collision at the new skate location".into());
-                }
-                let mut state = server_state()
-                    .lock()
-                    .map_err(|_| "Skate mode state is unavailable".to_owned())?;
-                let Some(session) = state.sessions.get_mut(&name) else {
-                    return Err("Skate session is no longer active".into());
-                };
-                session.refresh_collision(local.triangles, local.rails)?;
-                state
-                    .collision_center
-                    .insert(name.clone(), (pose.root[0], pose.root[1], pose.root[2]));
-                Ok(())
-            });
-            if let Err(error) = refreshed {
-                if let Ok(mut state) = server_state().lock() {
-                    state.enabled.remove(&name);
-                    state.sessions.remove(&name);
-                    state.controls.remove(&name);
-                    state.control_updated_at.remove(&name);
-                    state.engine_accumulator.remove(&name);
-                    state.engine_updated_at.remove(&name);
-                    state.last_broadcast_at.remove(&name);
-                    state.collision_center.remove(&name);
-                }
-                event.to_position = event.from_position;
-                broadcast_state(
-                    &server,
-                    entity_id,
-                    event.from_position,
-                    event.player.get_yaw(),
-                    0.0,
-                    false,
-                );
-                event.player.send_system_message(
-                    TextComponent::text(&format!(
-                        "Skate Engine stopped while updating local collision: {error}"
-                    )),
-                    true,
-                );
-                return event;
-            }
+        let world = event.player.as_entity().get_world();
+        let scan_center = (
+            f64::from(pose.root[0]),
+            f64::from(pose.root[1]),
+            f64::from(pose.root[2]),
+        );
+        if let Err(error) = advance_collision_scan(
+            &world,
+            &name,
+            should_refresh_collision,
+            scan_center,
+            COLLISION_BLOCKS_PER_MOVEMENT,
+        ) {
+            stop_skate_after_collision_error(&server, &mut event, &name, entity_id, error);
+            return event;
         }
         if should_broadcast {
             broadcast_pose(&server, entity_id, &pose, true);
         }
         event
     }
+}
+
+fn advance_collision_scan(
+    world: &pumpkin_plugin_api::World,
+    name: &str,
+    start_if_needed: bool,
+    requested_center: (f64, f64, f64),
+    block_budget: usize,
+) -> Result<(), String> {
+    let mut scan = {
+        let mut state = server_state()
+            .lock()
+            .map_err(|_| "Skate mode state is unavailable".to_owned())?;
+        if start_if_needed {
+            state
+                .collision_scans
+                .entry(name.to_owned())
+                .or_insert_with(|| CollisionScan::new(requested_center));
+        }
+        state.collision_scans.remove(name)
+    };
+    let Some(mut scan) = scan.take() else {
+        return Ok(());
+    };
+    if !scan.advance(world, block_budget)? {
+        server_state()
+            .lock()
+            .map_err(|_| "Skate mode state is unavailable".to_owned())?
+            .collision_scans
+            .insert(name.to_owned(), scan);
+        return Ok(());
+    }
+
+    let center = scan.center();
+    let local = scan
+        .into_local()
+        .filter(|local| !local.triangles.is_empty())
+        .ok_or_else(|| "Minecraft returned no collision at the new skate location".to_owned())?;
+    let mut state = server_state()
+        .lock()
+        .map_err(|_| "Skate mode state is unavailable".to_owned())?;
+    let Some(session) = state.sessions.get_mut(name) else {
+        return Err("Skate session is no longer active".into());
+    };
+    session.refresh_collision(local.triangles, local.rails)?;
+    state.collision_center.insert(name.to_owned(), center);
+    Ok(())
+}
+
+fn stop_skate_after_collision_error(
+    server: &Server,
+    event: &mut pumpkin_plugin_api::events::EventData<PlayerMoveEvent>,
+    name: &str,
+    entity_id: u32,
+    error: String,
+) {
+    if let Ok(mut state) = server_state().lock() {
+        state.enabled.remove(name);
+        state.sessions.remove(name);
+        state.controls.remove(name);
+        state.control_updated_at.remove(name);
+        state.engine_accumulator.remove(name);
+        state.engine_updated_at.remove(name);
+        state.last_broadcast_at.remove(name);
+        state.collision_center.remove(name);
+        state.collision_scans.remove(name);
+    }
+    event.to_position = event.from_position;
+    event.player.send_system_message(
+        TextComponent::text(&format!(
+            "Skate Engine stopped while updating local collision: {error}"
+        )),
+        true,
+    );
+    broadcast_state(
+        server,
+        entity_id,
+        event.from_position,
+        event.player.get_yaw(),
+        0.0,
+        false,
+    );
 }
 
 fn collision_refresh_needed(center: (f32, f32, f32), root: [f32; 3]) -> bool {

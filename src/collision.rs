@@ -8,76 +8,128 @@ const HORIZONTAL_RADIUS: i32 = 12;
 const VERTICAL_BELOW: i32 = 4;
 const VERTICAL_ABOVE: i32 = 8;
 const MAX_TRIANGLES: usize = 120_000;
+const SAMPLE_WIDTH: usize = (HORIZONTAL_RADIUS * 2 + 1) as usize;
+const SAMPLE_HEIGHT: usize = (VERTICAL_BELOW + VERTICAL_ABOVE + 1) as usize;
+const SAMPLE_BLOCKS: usize = SAMPLE_WIDTH * SAMPLE_WIDTH * SAMPLE_HEIGHT;
 
 pub struct LocalCollision {
     pub triangles: Vec<[[f32; 3]; 3]>,
     pub rails: Vec<Vec<[f32; 3]>>,
 }
 
-pub fn around_player(world: &World, position: (f64, f64, f64)) -> Result<LocalCollision, String> {
-    let origin = (
-        position.0.floor() as i32,
-        position.1.floor() as i32,
-        position.2.floor() as i32,
-    );
-    let min_x = origin.0 - HORIZONTAL_RADIUS;
-    let max_x = origin.0 + HORIZONTAL_RADIUS;
-    let min_z = origin.2 - HORIZONTAL_RADIUS;
-    let max_z = origin.2 + HORIZONTAL_RADIUS;
-    let min_y = origin.1 - VERTICAL_BELOW;
-    let max_y = origin.1 + VERTICAL_ABOVE;
+/// A resumable local collision scan. `advance` bounds the number of host world
+/// queries performed during one server movement callback.
+pub struct CollisionScan {
+    origin: (i32, i32, i32),
+    center: (f32, f32, f32),
+    cursor: usize,
+    grindable_states: HashMap<(i32, i32, i32), (String, f32)>,
+    block_state_cache: HashMap<u16, Option<BlockState>>,
+    triangles: Vec<[[f32; 3]; 3]>,
+}
 
-    let mut grindable_states = HashMap::new();
-    let mut block_state_cache = HashMap::new();
-    let mut triangles = Vec::new();
-    for y in min_y..=max_y {
-        for x in min_x..=max_x {
-            for z in min_z..=max_z {
-                let position = BlockPos { x, y, z };
-                let state_id = world.get_block_state_id(position);
-                let Some(state) = cached_lookup(&mut block_state_cache, state_id, || {
-                    BlockState::from_id(state_id)
-                }) else {
-                    continue;
-                };
-                if state.is_air || state.is_liquid || state.collision_shapes.is_empty() {
-                    continue;
-                }
-                let mut grind_height = None;
-                for bounds in &state.collision_shapes {
-                    add_box(
-                        &mut triangles,
-                        [
-                            x as f32 + bounds.min.0 as f32,
-                            y as f32 + bounds.min.1 as f32,
-                            z as f32 + bounds.min.2 as f32,
-                        ],
-                        [
-                            x as f32 + bounds.max.0 as f32,
-                            y as f32 + bounds.max.1 as f32,
-                            z as f32 + bounds.max.2 as f32,
-                        ],
-                    );
-                    if triangles.len() > MAX_TRIANGLES {
-                        return Err("Minecraft collision sample exceeded the 120,000-triangle safety limit; use a smaller local skate area.".into());
-                    }
-                    grind_height = Some(
-                        grind_height
-                            .unwrap_or(f32::NEG_INFINITY)
-                            .max(bounds.max.1 as f32),
-                    );
-                }
-                if grindable(&state) {
-                    if let Some(height) = grind_height {
-                        grindable_states.insert((x, y, z), (state.block_name.clone(), height));
-                    }
-                }
-            }
+impl CollisionScan {
+    pub fn new(position: (f64, f64, f64)) -> Self {
+        let origin = (
+            position.0.floor() as i32,
+            position.1.floor() as i32,
+            position.2.floor() as i32,
+        );
+        Self {
+            origin,
+            center: (position.0 as f32, position.1 as f32, position.2 as f32),
+            cursor: 0,
+            grindable_states: HashMap::new(),
+            block_state_cache: HashMap::new(),
+            triangles: Vec::new(),
         }
     }
 
-    let rails = rails_from_states(&grindable_states);
-    Ok(LocalCollision { triangles, rails })
+    pub fn center(&self) -> (f32, f32, f32) {
+        self.center
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.cursor == SAMPLE_BLOCKS
+    }
+
+    pub fn advance(&mut self, world: &World, budget: usize) -> Result<bool, String> {
+        let end = sample_batch_end(self.cursor, budget);
+        while self.cursor < end {
+            let (x, y, z) = sample_position(self.origin, self.cursor);
+            self.cursor += 1;
+            let position = BlockPos { x, y, z };
+            let state_id = world.get_block_state_id(position);
+            let Some(state) = cached_lookup(&mut self.block_state_cache, state_id, || {
+                BlockState::from_id(state_id)
+            }) else {
+                continue;
+            };
+            if state.is_air || state.is_liquid || state.collision_shapes.is_empty() {
+                continue;
+            }
+            let mut grind_height = None;
+            for bounds in &state.collision_shapes {
+                add_box(
+                    &mut self.triangles,
+                    [
+                        x as f32 + bounds.min.0 as f32,
+                        y as f32 + bounds.min.1 as f32,
+                        z as f32 + bounds.min.2 as f32,
+                    ],
+                    [
+                        x as f32 + bounds.max.0 as f32,
+                        y as f32 + bounds.max.1 as f32,
+                        z as f32 + bounds.max.2 as f32,
+                    ],
+                );
+                if self.triangles.len() > MAX_TRIANGLES {
+                    return Err("Minecraft collision sample exceeded the 120,000-triangle safety limit; use a smaller local skate area.".into());
+                }
+                grind_height = Some(
+                    grind_height
+                        .unwrap_or(f32::NEG_INFINITY)
+                        .max(bounds.max.1 as f32),
+                );
+            }
+            if grindable(state) {
+                if let Some(height) = grind_height {
+                    self.grindable_states
+                        .insert((x, y, z), (state.block_name.clone(), height));
+                }
+            }
+        }
+        Ok(self.is_complete())
+    }
+
+    pub fn into_local(self) -> Option<LocalCollision> {
+        self.is_complete().then(|| LocalCollision {
+            triangles: self.triangles,
+            rails: rails_from_states(&self.grindable_states),
+        })
+    }
+}
+
+pub fn around_player(world: &World, position: (f64, f64, f64)) -> Result<LocalCollision, String> {
+    let mut scan = CollisionScan::new(position);
+    scan.advance(world, SAMPLE_BLOCKS)?;
+    scan.into_local()
+        .ok_or_else(|| "Minecraft collision scan did not finish".to_owned())
+}
+
+fn sample_position(origin: (i32, i32, i32), index: usize) -> (i32, i32, i32) {
+    let x_offset = ((index / SAMPLE_WIDTH) % SAMPLE_WIDTH) as i32;
+    let y_offset = (index / (SAMPLE_WIDTH * SAMPLE_WIDTH)) as i32;
+    let z_offset = (index % SAMPLE_WIDTH) as i32;
+    (
+        origin.0 - HORIZONTAL_RADIUS + x_offset,
+        origin.1 - VERTICAL_BELOW + y_offset,
+        origin.2 - HORIZONTAL_RADIUS + z_offset,
+    )
+}
+
+fn sample_batch_end(cursor: usize, budget: usize) -> usize {
+    cursor.saturating_add(budget).min(SAMPLE_BLOCKS)
 }
 
 fn cached_lookup<T>(
@@ -142,7 +194,10 @@ fn add_box(out: &mut Vec<[[f32; 3]; 3]>, min: [f32; 3], max: [f32; 3]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_box, cached_lookup, rails_from_states};
+    use super::{
+        SAMPLE_BLOCKS, SAMPLE_HEIGHT, SAMPLE_WIDTH, add_box, cached_lookup, rails_from_states,
+        sample_batch_end, sample_position,
+    };
     use std::cell::Cell;
     use std::collections::HashMap;
 
@@ -203,5 +258,27 @@ mod tests {
             );
         }
         assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn sample_positions_cover_the_volume_in_original_y_x_z_order() {
+        let origin = (100, 64, -30);
+        assert_eq!(SAMPLE_BLOCKS, SAMPLE_WIDTH * SAMPLE_WIDTH * SAMPLE_HEIGHT);
+        assert_eq!(sample_position(origin, 0), (88, 60, -42));
+        assert_eq!(sample_position(origin, SAMPLE_WIDTH - 1), (88, 60, -18));
+        assert_eq!(sample_position(origin, SAMPLE_WIDTH), (89, 60, -42));
+        assert_eq!(
+            sample_position(origin, SAMPLE_WIDTH * SAMPLE_WIDTH),
+            (88, 61, -42)
+        );
+        assert_eq!(sample_position(origin, SAMPLE_BLOCKS - 1), (112, 72, -18));
+    }
+
+    #[test]
+    fn collision_scan_batches_never_exceed_the_requested_budget() {
+        assert_eq!(sample_batch_end(0, 1_024), 1_024);
+        assert_eq!(sample_batch_end(4_000, 1_024) - 4_000, 1_024);
+        assert_eq!(sample_batch_end(SAMPLE_BLOCKS - 12, 1_024), SAMPLE_BLOCKS);
+        assert_eq!(sample_batch_end(SAMPLE_BLOCKS, 1_024), SAMPLE_BLOCKS);
     }
 }
