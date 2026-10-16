@@ -49,6 +49,7 @@ pub struct SkateSession {
     session: Session,
     bone_names: Vec<String>,
     bones_root_relative: Option<bool>,
+    previous_respawn: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -107,12 +108,19 @@ impl SkateSession {
             session,
             bone_names: initial_pose.names,
             bones_root_relative: None,
+            previous_respawn: false,
         })
     }
 
     /// One deterministic 60 Hz engine step. The caller owns the server tick
     /// accumulator and must not call this directly from client packet cadence.
     pub fn tick(&mut self, controls: Controls) -> Result<SkatePose, String> {
+        if controls.respawn && !self.previous_respawn {
+            if let Err(error) = self.session.return_to_checkpoint() {
+                eprintln!("PEX Skate checkpoint respawn unavailable: {error}");
+            }
+        }
+        self.previous_respawn = controls.respawn;
         self.session.tick(to_engine_controls(controls))?;
         Ok(self.pose())
     }
@@ -319,6 +327,7 @@ mod tests {
             brake: true,
             dismount: false,
             session_modifier: false,
+            respawn: false,
         });
         assert_eq!(input.buttons, (1 << 12) | (1 << 13) | (1 << 14));
         assert_eq!(input.triggers, [96, 255]);

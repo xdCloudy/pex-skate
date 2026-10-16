@@ -14,10 +14,11 @@ pub struct Controls {
     pub brake: bool,
     pub dismount: bool,
     pub session_modifier: bool,
+    pub respawn: bool,
 }
 
 impl Controls {
-    /// Decode v1 legacy, v2 stick, v3 trigger-aware, and v4 D-pad packets.
+    /// Decode legacy controls through v7's marker and checkpoint actions.
     pub fn decode(packet: &[u8]) -> Option<Self> {
         match packet {
             [1, flags, forward, steer] if flags & !0x1f == 0 => Some(Self {
@@ -38,6 +39,7 @@ impl Controls {
                 brake: flags & 2 != 0,
                 dismount: false,
                 session_modifier: false,
+                respawn: false,
             }),
             [2, flags, forward, steer, right_x, right_y] if flags & !0x07 == 0 => Some(Self {
                 forward: f32::from(*forward as i8) / 127.0,
@@ -51,6 +53,7 @@ impl Controls {
                 brake: flags & 4 != 0,
                 dismount: false,
                 session_modifier: false,
+                respawn: false,
             }),
             [
                 3,
@@ -73,6 +76,7 @@ impl Controls {
                 brake: flags & 4 != 0,
                 dismount: false,
                 session_modifier: false,
+                respawn: false,
             }),
             [
                 4,
@@ -95,6 +99,7 @@ impl Controls {
                 brake: flags & 4 != 0,
                 dismount: false,
                 session_modifier: false,
+                respawn: false,
             }),
             [
                 5,
@@ -117,6 +122,7 @@ impl Controls {
                 brake: flags & 4 != 0,
                 dismount: flags & 0x80 != 0,
                 session_modifier: false,
+                respawn: false,
             }),
             [
                 6,
@@ -140,6 +146,31 @@ impl Controls {
                 brake: flags & 4 != 0,
                 dismount: flags & 0x80 != 0,
                 session_modifier: modifiers & 1 != 0,
+                respawn: false,
+            }),
+            [
+                7,
+                flags,
+                left_trigger,
+                right_trigger,
+                forward,
+                steer,
+                right_x,
+                right_y,
+                modifiers,
+            ] if modifiers & !3 == 0 => Some(Self {
+                forward: f32::from(*forward as i8) / 127.0,
+                steer: f32::from(*steer as i8) / 127.0,
+                right_x: f32::from(*right_x as i8) / 127.0,
+                right_y: f32::from(*right_y as i8) / 127.0,
+                triggers: [*left_trigger, *right_trigger],
+                dpad: (flags >> 3) & 0x0f,
+                push: flags & 1 != 0,
+                push_left: flags & 2 != 0,
+                brake: flags & 4 != 0,
+                dismount: flags & 0x80 != 0,
+                session_modifier: modifiers & 1 != 0,
+                respawn: modifiers & 2 != 0,
             }),
             _ => None,
         }
@@ -211,5 +242,13 @@ mod tests {
         assert!(controls.dismount);
         assert_eq!(controls.dpad, 1);
         assert!(Controls::decode(&[6, 0, 0, 0, 0, 0, 0, 0, 2]).is_none());
+    }
+
+    #[test]
+    fn decodes_v7_manual_respawn_action() {
+        let controls = Controls::decode(&[7, 0, 0, 0, 0, 0, 0, 0, 3]).unwrap();
+        assert!(controls.session_modifier);
+        assert!(controls.respawn);
+        assert!(Controls::decode(&[7, 0, 0, 0, 0, 0, 0, 0, 4]).is_none());
     }
 }

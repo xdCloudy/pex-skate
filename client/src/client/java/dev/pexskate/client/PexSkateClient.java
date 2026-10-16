@@ -58,6 +58,7 @@ public final class PexSkateClient implements ClientModInitializer {
     private static final KeyMapping DPAD_RIGHT = flickKey("key.pexskate.dpad_right", InputConstants.KEY_O);
     private static final KeyMapping DISMOUNT = flickKey("key.pexskate.dismount", InputConstants.KEY_F);
     private static final KeyMapping SESSION_MODIFIER = flickKey("key.pexskate.session_modifier", InputConstants.KEY_LCONTROL);
+    private static final KeyMapping RESPAWN = flickKey("key.pexskate.respawn", InputConstants.KEY_R);
 
     private static volatile boolean skateModeActive;
     private boolean skating;
@@ -238,12 +239,15 @@ public final class PexSkateClient implements ClientModInitializer {
         if (DPAD_LEFT.isDown()) dpad |= 4;
         if (DPAD_RIGHT.isDown()) dpad |= 8;
         flags |= dpad << 3;
+        boolean respawn = RESPAWN.isDown() || (pad.sessionModifier() && pad.pushLeft());
+        byte modifiers = (byte) ((SESSION_MODIFIER.isDown() || pad.sessionModifier() ? 1 : 0)
+                | (respawn ? 2 : 0));
 
         ClientPlayNetworking.send(new ControlPayload(
-                (byte) 6, (byte) flags,
+                (byte) 7, (byte) flags,
                 quantizeTrigger(leftTrigger), quantizeTrigger(rightTrigger),
                 quantize(pad.forward()), quantize(steer), quantize(rightX), quantize(rightY),
-                (byte) ((SESSION_MODIFIER.isDown() || pad.sessionModifier()) ? 1 : 0)));
+                modifiers));
     }
 
     private Gamepad readGamepad() {

@@ -17,5 +17,6 @@
   "key.pexskate.dpad_right": "Skate D-pad Right",
   "key.pexskate.dismount": "Skate Get On/Off Board",
   "key.pexskate.session_modifier": "Skate Session Marker Modifier",
+  "key.pexskate.respawn": "Skate Respawn to Checkpoint",
   "key.category.pexskate.controls": "PEX Skate"
 }
