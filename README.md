@@ -2,7 +2,7 @@
 
 **Experimental multiplayer skate-mode bridge for PEX (Pumpkin Experimental Minecraft server).** This repository contains a portable PEX WebAssembly plugin and a Minecraft 26.3 Fabric client companion. The client is required for control input and third-person camera behavior.
 
-This is an early playable foundation, not a complete Skate 3 port yet. It has server-side momentum, steering, braking, pop input, and basic kickflip/shove trick state. Minecraft still owns terrain collision and gravity. The client companion draws a temporary oak pressure-plate board under every active skater so other modded players can see them. It does not yet include a proper skateboard/skater model, Skate 3 animations, grind detection, trick scoring UI, or the original engine's simulation. The Skate 3 Rust Engine is a separate Bevy game and cannot be loaded directly into PEX's sandboxed WASM plugin runtime.
+This is an early playable foundation, not a complete Skate 3 port yet. It has server-side momentum, steering, braking, pop input, and basic kickflip/shove trick state. Minecraft still owns terrain collision and gravity. The client companion draws an original low-poly skateboard model with deck, trucks, and wheels beneath each active skater. The player remains the normal Minecraft avatar; Skate 3 skater meshes and animations, grind detection, a trick scoring/landing loop, and the original engine simulation are still missing. The Skate 3 Rust Engine is a separate Bevy game and cannot be loaded directly into PEX's sandboxed WASM plugin runtime.
 
 ## What already exists to build on
 
@@ -10,13 +10,13 @@ The strongest integration reference is [SkateGM](https://github.com/the-schwilli
 
 PEX's plugin API exposes player custom-payload events, player movement events, and custom payload sending. This project uses those server hooks and a small Fabric client protocol. No Skate 3 assets or game data are included.
 
-The PEX plugin API is vendored at the pinned PEX 26.3 commit. The copy makes the workspace dependencies explicit and normalizes numeric WIT identifiers so current `cargo-component` can package the plugin; the declaration order is preserved. See [vendor/NOTICE.md](vendor/NOTICE.md).
+The PEX plugin API and its WIT definitions are vendored at the pinned PEX 26.3 commit. Only the API crate's workspace-inherited dependency declarations are made explicit so this project builds independently. The server binary was smoke-tested with the native WASI Preview 2 component output. See [vendor/NOTICE.md](vendor/NOTICE.md).
 
 ## Requirements
 
 - PEX/Pumpkin **Minecraft 26.3**, using the plugin API revision pinned in `Cargo.toml`.
 - A Java Edition Minecraft 26.3 client with Fabric Loader 0.19.5+, Fabric API 0.162.0+26.3, and Java 25+.
-- Rust stable, `wasm32-wasip2`, and `cargo-component` to build the server plugin.
+- Rust stable with the `wasm32-wasip2` target to build the server plugin.
 - JDK 25+ to build the client jar.
 
 Vanilla and Bedrock clients can join the server, but cannot use Skate mode. This first build targets Java/Fabric clients only.
@@ -25,7 +25,6 @@ Vanilla and Bedrock clients can join the server, but cannot use Skate mode. This
 
 ```powershell
 rustup target add wasm32-wasip2
-cargo install cargo-component
 cargo test --locked
 ./build.ps1
 ```
@@ -49,6 +48,8 @@ The server command `/skate` is also available for server-side toggling. The defa
 ## Protocol
 
 The client sends a `pexskate:control` custom payload once per client tick while Skate mode is active. Its v1 body is four bytes: protocol version, action flags, forward axis, and steer axis. The action flags are push, brake, pop, flip, and shove-it in bits 0 through 4. The PEX plugin validates the payload length/version/flags before using it.
+
+The server clears controls after 250 ms without a fresh client packet, removes player state on disconnect, and sends board state to clients at no more than 20 updates per second per skater.
 
 ## License and credits
 

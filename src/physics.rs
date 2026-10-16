@@ -22,6 +22,9 @@ pub struct SkateState {
     pub board_pitch: f32,
     pub board_roll: f32,
     pub score: u32,
+    combo_score: u32,
+    combo_tricks: u8,
+    airborne: bool,
     previous_pop: bool,
     previous_flip: bool,
     previous_shove: bool,
@@ -34,12 +37,14 @@ pub struct TickResult {
     pub velocity_z: f64,
     pub jumped: bool,
     pub trick: Option<Trick>,
+    pub landed_score: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Trick {
     Kickflip,
     ShoveIt,
+    VarialKickflip,
 }
 
 impl Controls {
@@ -100,12 +105,41 @@ impl SkateState {
         }
 
         let jumped = grounded && controls.pop && !self.previous_pop;
-        let trick = if !grounded && controls.flip && !self.previous_flip {
-            self.score = self.score.saturating_add(100);
+        let flip_pressed = controls.flip && !self.previous_flip;
+        let shove_pressed = controls.shove && !self.previous_shove;
+        let trick = if !grounded && flip_pressed && shove_pressed {
+            Some(Trick::VarialKickflip)
+        } else if !grounded && flip_pressed {
             Some(Trick::Kickflip)
-        } else if !grounded && controls.shove && !self.previous_shove {
-            self.score = self.score.saturating_add(100);
+        } else if !grounded && shove_pressed {
             Some(Trick::ShoveIt)
+        } else {
+            None
+        };
+
+        if let Some(trick) = trick {
+            let points = match trick {
+                Trick::Kickflip => 100,
+                Trick::ShoveIt => 150,
+                Trick::VarialKickflip => 250,
+            };
+            let link_bonus = u32::from(self.combo_tricks).saturating_mul(25);
+            self.combo_score = self.combo_score.saturating_add(points + link_bonus);
+            self.combo_tricks = self.combo_tricks.saturating_add(1);
+        }
+
+        let landed_score = if !grounded {
+            self.airborne = true;
+            None
+        } else if self.airborne {
+            self.airborne = false;
+            let landed_score = (self.combo_score > 0).then_some(self.combo_score);
+            if let Some(points) = landed_score {
+                self.score = self.score.saturating_add(points);
+            }
+            self.combo_score = 0;
+            self.combo_tricks = 0;
+            landed_score
         } else {
             None
         };
@@ -131,6 +165,7 @@ impl SkateState {
             velocity_z: self.velocity_z,
             jumped,
             trick,
+            landed_score,
         }
     }
 
@@ -177,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn pop_is_edge_triggered_and_air_tricks_score_once() {
+    fn pop_is_edge_triggered_and_air_tricks_score_when_landed() {
         let mut skate = SkateState::default();
         assert!(
             skate
@@ -216,6 +251,25 @@ mod tests {
                 .trick,
             Some(Trick::Kickflip)
         );
+        assert_eq!(skate.score, 0, "airborne tricks are not banked yet");
+        assert_eq!(
+            skate
+                .tick(Controls::default(), 0.0, true)
+                .landed_score,
+            Some(100)
+        );
         assert_eq!(skate.score, 100);
+    }
+
+    #[test]
+    fn linked_tricks_add_a_combo_bonus_and_only_bank_on_landing() {
+        let mut skate = SkateState::default();
+        let kickflip = Controls { flip: true, ..Controls::default() };
+        let shove = Controls { shove: true, ..Controls::default() };
+        assert_eq!(skate.tick(kickflip, 0.0, false).trick, Some(Trick::Kickflip));
+        skate.tick(Controls::default(), 0.0, false);
+        assert_eq!(skate.tick(shove, 0.0, false).trick, Some(Trick::ShoveIt));
+        assert_eq!(skate.tick(Controls::default(), 0.0, true).landed_score, Some(275));
+        assert_eq!(skate.score, 275);
     }
 }

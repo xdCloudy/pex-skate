@@ -59,12 +59,12 @@ world plugin {
     import inventory;
     /// Provides datapack inspection and management.
     import datapack;
-    /// Provides screen / window types for GUIs and containers.
-    import screens;
     /// Provides custom enchantment registration and management.
     import enchantments;
     /// Provides damage types.
     import damage-types;
+    /// Provides screen / window types for GUIs and containers.
+    import screens;
     /// Provides player statistics categories and types.
     import statistics;
     /// Provides Display and Interaction entities.

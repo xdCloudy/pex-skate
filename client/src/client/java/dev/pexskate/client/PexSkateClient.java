@@ -10,6 +10,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.entity.Display.ItemDisplay;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
@@ -34,6 +35,7 @@ public final class PexSkateClient implements ClientModInitializer {
     private CameraType previousCamera;
     private static final Map<Integer, ItemDisplay> BOARDS = new HashMap<>();
     private static final Map<Integer, Long> LAST_SEEN = new HashMap<>();
+    private static final Identifier BOARD_MODEL = Identifier.fromNamespaceAndPath("pexskate", "skateboard");
 
     @Override
     public void onInitializeClient() {
@@ -55,7 +57,8 @@ public final class PexSkateClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
     }
 
-    private static void updateBoard(Minecraft client, SkateStatePayload state) {
+    private void updateBoard(Minecraft client, SkateStatePayload state) {
+        syncLocalCamera(client, state);
         ItemDisplay board = BOARDS.get(state.entityId());
         if (!state.active()) {
             if (board != null) board.discard();
@@ -70,7 +73,9 @@ public final class PexSkateClient implements ClientModInitializer {
             if (board == null) return;
             board.setId(-1_000_000 - state.entityId());
             board.setNoGravity(true);
-            board.setItemStack(new ItemStack(Items.OAK_PRESSURE_PLATE));
+            ItemStack boardItem = new ItemStack(Items.OAK_PRESSURE_PLATE);
+            boardItem.set(DataComponents.ITEM_MODEL, BOARD_MODEL);
+            board.setItemStack(boardItem);
             client.level.addEntity(board);
             BOARDS.put(state.entityId(), board);
         }
@@ -78,6 +83,20 @@ public final class PexSkateClient implements ClientModInitializer {
         board.setYRot(state.yaw());
         board.setXRot((float) Math.toDegrees(state.roll()));
         LAST_SEEN.put(state.entityId(), client.level.getGameTime());
+    }
+
+    private void syncLocalCamera(Minecraft client, SkateStatePayload state) {
+        if (client.player == null || client.player.getId() != state.entityId() || skating == state.active()) {
+            return;
+        }
+        skating = state.active();
+        if (skating) {
+            previousCamera = client.options.getCameraType();
+            client.options.setCameraType(CameraType.THIRD_PERSON_BACK);
+        } else if (previousCamera != null) {
+            client.options.setCameraType(previousCamera);
+            previousCamera = null;
+        }
     }
 
     private static void clearBoards() {

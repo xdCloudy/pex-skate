@@ -160,7 +160,7 @@ interface java-packets {
     pickup,
     /// Performs a shift-click. This usually quickly moves items between the player's inventory and the open screen handler.
     quick-move,
-    /// Exchanges items between a slot and a hotbar slot. This is usually triggered by the player pressing a 1-nine number key while hovering over a slot.
+    /// Exchanges items between a slot and a hotbar slot. This is usually triggered by the player pressing a 1-9 number key while hovering over a slot.
     /// When the action type is swap, the click data is the hotbar slot to swap with (0-8).
     swap,
     /// Clones the item in the slot. Usually triggered by middle clicking an item in creative mode.
@@ -533,10 +533,10 @@ interface java-packets {
   record s-update-sign {
     location: tuple<s32, s32, s32>,
     is-front-text: bool,
-    line-one: string,
-    line-two: string,
-    line-three: string,
-    line-four: string,
+    line-1: string,
+    line-2: string,
+    line-3: string,
+    line-4: string,
   }
   record s-use-item {
     hand: s32,
@@ -746,7 +746,7 @@ interface java-packets {
     /// The coordinates of the block being destroyed.
     location: tuple<s32, s32, s32>,
     /// The destruction stage, typically a value from 0 to 9.
-    /// Any value outside 0-nine (like -1) will remove the destruction overlay.
+    /// Any value outside 0-9 (like -1) will remove the destruction overlay.
     destroy-stage: u8,
   }
   /// Updates the NBT data of a block entity (e.g., signs, chests, or banners).
@@ -1772,9 +1772,9 @@ interface java-packets {
     position: tuple<f64, f64, f64>,
     /// The intended velocity of the player after teleporting.
     delta: tuple<f64, f64, f64>,
-    /// The horizontal rotation (0-number-360 degrees).
+    /// The horizontal rotation (0-360 degrees).
     yaw: f32,
-    /// The vertical rotation (-number-90 to 90 degrees).
+    /// The vertical rotation (-90 to 90 degrees).
     pitch: f32,
     /// A set of flags determining which of the above fields are relative (~).
     relatives: list<string>,
@@ -1797,7 +1797,7 @@ interface java-packets {
     /// Used by the client to seed local biome noise and decoration algorithms.
     hashed-seed: s64,
     game-mode: u8,
-    /// The previous gamemode (used for the F3+F4 toggle UI). -one if none.
+    /// The previous gamemode (used for the F3+F4 toggle UI). -1 if none.
     previous-gamemode: u8,
     /// If true, the world is a debug world (all blocks shown in a grid).
     debug: bool,
@@ -1821,10 +1821,10 @@ interface java-packets {
     dimension-name: string,
     /// The X, Y, and Z coordinates of the spawn location.
     location: tuple<s32, s32, s32>,
-    /// The horizontal rotation (0-number-360 degrees) the player's camera should face upon respawning.
+    /// The horizontal rotation (0-360 degrees) the player's camera should face upon respawning.
     /// (1.17+)
     yaw: f32,
-    /// The vertical rotation (-number-90 to 90 degrees) the player's camera should face upon respawning.
+    /// The vertical rotation (-90 to 90 degrees) the player's camera should face upon respawning.
     /// (1.21.9+)
     pitch: f32,
   }

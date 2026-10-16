@@ -1014,7 +1014,7 @@ interface bedrock-packets {
     %flags: s32,
     /// Minimum permission level required to execute the command.
     permission-level: command-permission-level,
-    /// Index into enum table defining aliases for this command (-one if none).
+    /// Index into enum table defining aliases for this command (-1 if none).
     alias-enum: s32,
     /// Indices of chained subcommands referenced by this command.
     command-data-chained-subcommand-indexes: list<s32>,
@@ -1962,8 +1962,8 @@ interface bedrock-packets {
     experience-world-id: uuid,
     experience-world-name: string,
     creator-id: string,
-    unknown-uuid-one: uuid,
-    unknown-uuid-two: uuid,
+    unknown-uuid-1: uuid,
+    unknown-uuid-2: uuid,
     server-id: string,
   }
   record store-entry-point-info {

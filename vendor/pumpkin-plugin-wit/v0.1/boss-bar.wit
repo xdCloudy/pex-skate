@@ -17,10 +17,10 @@ interface boss-bar {
     /// Represents the notches/divisions of a boss bar.
     enum boss-bar-division {
         no-division,
-        notches-six,
-        notches-ten,
-        notches-twelve,
-        notches-twenty,
+        notches-6,
+        notches-10,
+        notches-12,
+        notches-20,
     }
 
     /// Metadata flags that can be toggled on a boss bar.
