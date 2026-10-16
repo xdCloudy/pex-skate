@@ -1778,11 +1778,14 @@ mod integration_tests {
         CLIENT_PROTOCOL_VERSION, COLLISION_BLOCKS_GLOBAL_PER_TICK, COLLISION_BLOCKS_PER_TICK,
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, MapDigests, PendingSkateLoad,
         PropWorldKey, ServerState, append_map_identity, append_prop_updates, append_visual,
-        clear_skate_state, collision::CollisionScan, collision_refresh_needed,
-        collision_work_order, encode_pose_payload, engine, initial_scan_recenter_needed,
-        physics::Controls, player_collision_impact, prop_physics, sequence_is_newer,
-        should_refresh_collision, shove_impact, shove_pressed_edge, supports_client_protocol,
-        swept_player_collision_impact, take_collision_budget,
+        clear_skate_state,
+        collision::CollisionScan,
+        collision_refresh_needed, collision_work_order, encode_pose_payload, engine,
+        initial_scan_recenter_needed,
+        physics::{Controls, decode_sequenced},
+        player_collision_impact, prop_physics, sequence_is_newer, should_refresh_collision,
+        shove_impact, shove_pressed_edge, supports_client_protocol, swept_player_collision_impact,
+        take_collision_budget,
     };
     use engine::SkatePose;
     use std::time::{Duration, Instant};
@@ -1844,6 +1847,27 @@ mod integration_tests {
             hex,
             include_str!("../client/src/test/resources/pex-state-v11.hex").trim()
         );
+    }
+
+    #[test]
+    fn client_control_v9_fixture_decodes_to_server_gameplay_inputs() {
+        let hex = include_str!("../client/src/test/resources/pex-control-v9.hex").trim();
+        let packet = hex
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect::<Vec<_>>();
+        let (controls, sequence) = decode_sequenced(&packet).unwrap();
+
+        assert_eq!(sequence, 0x1234_5678);
+        assert_eq!(controls.forward, 64.0 / 127.0);
+        assert_eq!(controls.steer, -64.0 / 127.0);
+        assert_eq!(controls.right_x, -1.0);
+        assert_eq!(controls.right_y, 1.0);
+        assert_eq!(controls.triggers, [127, 200]);
+        assert_eq!(controls.dpad, 12);
+        assert!(controls.push && controls.push_left && controls.brake && controls.dismount);
+        assert!(controls.session_modifier && controls.respawn && controls.shove);
     }
 
     #[test]
