@@ -9,6 +9,9 @@ const MIN_IMPACT_SPEED: f32 = 1.0;
 const IMPULSE_SCALE: f32 = 0.28;
 const MAX_PROP_SPEED: f32 = 7.0;
 const MAX_PROP_ANGULAR_SPEED: f32 = 4.0;
+const PROP_DENSITY: f32 = 2.0;
+const MIN_PROP_MASS: f32 = 0.25;
+const MAX_PROP_MASS: f32 = 500.0;
 const LINEAR_DAMPING: f32 = 2.2;
 const ANGULAR_DAMPING: f32 = 2.8;
 pub const MAX_PROP_UPDATES: usize = 8_192;
@@ -126,8 +129,10 @@ impl PropWorld {
                         board_from[axis] + (board_to[axis] - board_from[axis]) * time
                     });
                     let body = &mut self.bodies[index];
+                    let dimensions = body_dimensions(body);
+                    let mass = estimated_mass(dimensions);
                     for axis in 0..3 {
-                        body.velocity[axis] += impulse[axis];
+                        body.velocity[axis] += impulse[axis] / mass;
                     }
                     let body_speed = length(body.velocity);
                     if body_speed > MAX_PROP_SPEED {
@@ -138,11 +143,10 @@ impl PropWorld {
                     let pivot = body.current_pivot();
                     let lever_arm = [impact[0] - pivot[0], impact[2] - pivot[2]];
                     let torque_y = lever_arm[1] * impulse[0] - lever_arm[0] * impulse[2];
-                    let inertia = world_bounds(body).map_or(1.0, |bounds| {
-                        let width = bounds[3] - bounds[0];
-                        let depth = bounds[5] - bounds[2];
-                        ((width * width + depth * depth) / 12.0).max(0.1)
-                    });
+                    let inertia = (mass
+                        * (dimensions[0] * dimensions[0] + dimensions[2] * dimensions[2])
+                        / 12.0)
+                        .clamp(0.1, MAX_PROP_MASS * 1_000.0);
                     body.angular_velocity = (body.angular_velocity + torque_y / inertia)
                         .clamp(-MAX_PROP_ANGULAR_SPEED, MAX_PROP_ANGULAR_SPEED);
                 }
@@ -188,6 +192,35 @@ impl PropWorld {
         self.revision = revision;
         changed
     }
+}
+
+/// Estimate world-space local dimensions, preserving scale without letting
+/// current yaw rotation change the body's mass or inertia from frame to frame.
+fn body_dimensions(body: &PropBody) -> [f32; 3] {
+    std::array::from_fn(|axis| {
+        let extent = (body.local_bounds[axis + 3] - body.local_bounds[axis]).abs();
+        let column = [
+            body.transform[axis * 4],
+            body.transform[axis * 4 + 1],
+            body.transform[axis * 4 + 2],
+        ];
+        let dimension = extent * length(column);
+        if dimension.is_finite() {
+            dimension
+        } else {
+            0.0
+        }
+    })
+}
+
+/// Use uniform density as a fallback because the converted DMO data has no
+/// dependable authored mass. The bounds-derived estimate remains explicit and
+/// capped so malformed or enormous scenery cannot destabilize the simulation.
+fn estimated_mass(dimensions: [f32; 3]) -> f32 {
+    let volume = dimensions.into_iter().product::<f32>();
+    (volume * PROP_DENSITY)
+        .clamp(MIN_PROP_MASS, MAX_PROP_MASS)
+        .max(MIN_PROP_MASS)
 }
 
 impl PropBody {
@@ -356,6 +389,23 @@ mod tests {
         for axis in 0..3 {
             assert!((pivot_from_transform[axis] - expected_pivot[axis]).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn collision_bounds_scale_linear_and_angular_response() {
+        let small = PropBody::new(1, identity(), [-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]);
+        let large = PropBody::new(2, identity(), [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]);
+        let mut small_world = PropWorld::new(vec![small]);
+        let mut large_world = PropWorld::new(vec![large]);
+
+        for world in [&mut small_world, &mut large_world] {
+            world.step([-3.0, 0.0, 0.4], [3.0, 0.0, 0.4], [8.0, 0.0, 0.0], 0.05);
+        }
+
+        let small_update = small_world.changes_since(0).0[0];
+        let large_update = large_world.changes_since(0).0[0];
+        assert!(small_update.translation[0] > large_update.translation[0]);
+        assert!(small_update.yaw > large_update.yaw);
     }
 
     #[test]
