@@ -123,34 +123,42 @@ public final class PexSkateClient implements ClientModInitializer {
             return;
         }
         if (client.level == null) return;
-        if (board == null || board.level() != client.level) {
+        if (SkateSkaterModel.isReady()) {
+            // The converted retail GLB includes the deck, trucks, and wheels,
+            // all skinned to the Skate engine's board joints. Keep the
+            // pressure-plate display only as the no-assets fallback.
             if (board != null) board.discard();
-            board = EntityTypes.ITEM_DISPLAY.create(client.level, EntitySpawnReason.TRIGGERED);
-            if (board == null) return;
-            board.setId(-1_000_000 - state.entityId());
-            board.setNoGravity(true);
-            board.setTransformationInterpolationDuration(3);
-            board.setPosRotInterpolationDuration(3);
-            ItemStack boardItem = new ItemStack(Items.OAK_PRESSURE_PLATE);
-            boardItem.set(DataComponents.ITEM_MODEL, BOARD_MODEL);
-            board.setItemStack(boardItem);
-            client.level.addEntity(board);
-            BOARDS.put(state.entityId(), board);
-        }
-        board.setPos(state.boardPosX(), state.boardPosY() + 0.03, state.boardPosZ());
-        // Apply the complete engine orientation so flips and board roll survive
-        // the server/client bridge instead of collapsing to yaw and pitch.
-        float bx = state.boardRotX();
-        float by = state.boardRotY();
-        float bz = state.boardRotZ();
-        float bw = state.boardRotW();
-        float rotationLength = (float) Math.sqrt(bx * bx + by * by + bz * bz + bw * bw);
-        if (Float.isFinite(rotationLength) && rotationLength > 1.0e-5f) {
-            board.setTransformation(new Transformation(
-                    new org.joml.Vector3f(),
-                    new org.joml.Quaternionf(bx, by, bz, bw).normalize(),
-                    new org.joml.Vector3f(1.0f),
-                    new org.joml.Quaternionf()));
+            BOARDS.remove(state.entityId());
+        } else {
+            if (board == null || board.level() != client.level) {
+                if (board != null) board.discard();
+                board = EntityTypes.ITEM_DISPLAY.create(client.level, EntitySpawnReason.TRIGGERED);
+                if (board == null) return;
+                board.setId(-1_000_000 - state.entityId());
+                board.setNoGravity(true);
+                board.setTransformationInterpolationDuration(3);
+                board.setPosRotInterpolationDuration(3);
+                ItemStack boardItem = new ItemStack(Items.OAK_PRESSURE_PLATE);
+                boardItem.set(DataComponents.ITEM_MODEL, BOARD_MODEL);
+                board.setItemStack(boardItem);
+                client.level.addEntity(board);
+                BOARDS.put(state.entityId(), board);
+            }
+            board.setPos(state.boardPosX(), state.boardPosY() + 0.03, state.boardPosZ());
+            // Apply the complete engine orientation so flips and board roll
+            // survive the server/client bridge instead of collapsing to yaw.
+            float bx = state.boardRotX();
+            float by = state.boardRotY();
+            float bz = state.boardRotZ();
+            float bw = state.boardRotW();
+            float rotationLength = (float) Math.sqrt(bx * bx + by * by + bz * bz + bw * bw);
+            if (Float.isFinite(rotationLength) && rotationLength > 1.0e-5f) {
+                board.setTransformation(new Transformation(
+                        new org.joml.Vector3f(),
+                        new org.joml.Quaternionf(bx, by, bz, bw).normalize(),
+                        new org.joml.Vector3f(1.0f),
+                        new org.joml.Quaternionf()));
+            }
         }
         LAST_SEEN.put(state.entityId(), client.level.getGameTime());
 
