@@ -57,6 +57,7 @@ public final class PexSkateClient implements ClientModInitializer {
     private static final KeyMapping DPAD_LEFT = flickKey("key.pexskate.dpad_left", InputConstants.KEY_U);
     private static final KeyMapping DPAD_RIGHT = flickKey("key.pexskate.dpad_right", InputConstants.KEY_O);
     private static final KeyMapping DISMOUNT = flickKey("key.pexskate.dismount", InputConstants.KEY_F);
+    private static final KeyMapping SESSION_MODIFIER = flickKey("key.pexskate.session_modifier", InputConstants.KEY_LEFT_CONTROL);
 
     private static volatile boolean skateModeActive;
     private boolean skating;
@@ -239,9 +240,10 @@ public final class PexSkateClient implements ClientModInitializer {
         flags |= dpad << 3;
 
         ClientPlayNetworking.send(new ControlPayload(
-                (byte) 5, (byte) flags,
+                (byte) 6, (byte) flags,
                 quantizeTrigger(leftTrigger), quantizeTrigger(rightTrigger),
-                quantize(pad.forward()), quantize(steer), quantize(rightX), quantize(rightY)));
+                quantize(pad.forward()), quantize(steer), quantize(rightX), quantize(rightY),
+                (byte) ((SESSION_MODIFIER.isDown() || pad.sessionModifier()) ? 1 : 0)));
     }
 
     private Gamepad readGamepad() {
@@ -278,7 +280,8 @@ public final class PexSkateClient implements ClientModInitializer {
                 SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_WEST),
                 SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_EAST),
                 dpadButtons(),
-                SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_NORTH));
+                SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_NORTH),
+                SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_LEFT_SHOULDER));
     }
 
     private int dpadButtons() {
@@ -322,9 +325,10 @@ public final class PexSkateClient implements ClientModInitializer {
 
     private record Gamepad(float leftX, float forward, float rightX, float rightY,
                            float leftTrigger, float rightTrigger,
-                           boolean pushRight, boolean pushLeft, boolean brake, int dpad, boolean dismount) {
+                           boolean pushRight, boolean pushLeft, boolean brake, int dpad,
+                           boolean dismount, boolean sessionModifier) {
         private static final Gamepad NONE = new Gamepad(
-                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false, false, false, 0, false);
+                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false, false, false, 0, false, false);
     }
 
     private static void clearStaleBoards(Minecraft client) {

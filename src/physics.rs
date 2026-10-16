@@ -13,6 +13,7 @@ pub struct Controls {
     pub push_left: bool,
     pub brake: bool,
     pub dismount: bool,
+    pub session_modifier: bool,
 }
 
 impl Controls {
@@ -36,6 +37,7 @@ impl Controls {
                 push_left: false,
                 brake: flags & 2 != 0,
                 dismount: false,
+                session_modifier: false,
             }),
             [2, flags, forward, steer, right_x, right_y] if flags & !0x07 == 0 => Some(Self {
                 forward: f32::from(*forward as i8) / 127.0,
@@ -48,6 +50,7 @@ impl Controls {
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
                 dismount: false,
+                session_modifier: false,
             }),
             [
                 3,
@@ -69,6 +72,7 @@ impl Controls {
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
                 dismount: false,
+                session_modifier: false,
             }),
             [
                 4,
@@ -90,6 +94,7 @@ impl Controls {
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
                 dismount: false,
+                session_modifier: false,
             }),
             [
                 5,
@@ -111,6 +116,30 @@ impl Controls {
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
                 dismount: flags & 0x80 != 0,
+                session_modifier: false,
+            }),
+            [
+                6,
+                flags,
+                left_trigger,
+                right_trigger,
+                forward,
+                steer,
+                right_x,
+                right_y,
+                modifiers,
+            ] if modifiers & !1 == 0 => Some(Self {
+                forward: f32::from(*forward as i8) / 127.0,
+                steer: f32::from(*steer as i8) / 127.0,
+                right_x: f32::from(*right_x as i8) / 127.0,
+                right_y: f32::from(*right_y as i8) / 127.0,
+                triggers: [*left_trigger, *right_trigger],
+                dpad: (flags >> 3) & 0x0f,
+                push: flags & 1 != 0,
+                push_left: flags & 2 != 0,
+                brake: flags & 4 != 0,
+                dismount: flags & 0x80 != 0,
+                session_modifier: modifiers & 1 != 0,
             }),
             _ => None,
         }
@@ -173,5 +202,14 @@ mod tests {
         let controls = Controls::decode(&[5, 0b1000_1010, 0, 0, 0, 0, 0, 0]).unwrap();
         assert!(controls.dismount);
         assert_eq!(controls.dpad, 1);
+    }
+
+    #[test]
+    fn decodes_v6_session_marker_modifier_and_rejects_reserved_modifier_bits() {
+        let controls = Controls::decode(&[6, 0b1000_1010, 0, 0, 0, 0, 0, 0, 1]).unwrap();
+        assert!(controls.session_modifier);
+        assert!(controls.dismount);
+        assert_eq!(controls.dpad, 1);
+        assert!(Controls::decode(&[6, 0, 0, 0, 0, 0, 0, 0, 2]).is_none());
     }
 }
