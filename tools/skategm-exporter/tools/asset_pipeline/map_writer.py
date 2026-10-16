@@ -78,6 +78,8 @@ def encode_world_records(lights,routes):
         values=(*position,*direction,*colour,intensity,light_range,radius,inner,outer)
         if not all(np.isfinite(value) for value in values) or intensity<0 or light_range<=0 or radius<0 or not -1<=inner<=1 or not -1<=outer<=1:
             raise ValueError(f'Invalid authored light values for {name}')
+        if kind==1 and inner<outer:
+            raise ValueError(f'Invalid authored spotlight cone for {name}')
         string(output,name);u(output,kind);floats(output,*values)
     for route in routes:
         if not isinstance(route,dict):raise ValueError('Invalid authored NPC route record')

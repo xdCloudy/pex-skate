@@ -716,13 +716,14 @@ public final class SkateMapModel {
                     || values[12] < -1.0f || values[12] > 1.0f
                     || values[13] < -1.0f || values[13] > 1.0f || range > 8192.0f
                     || values[9] > 1_000_000.0f || values[11] > range
-                    || values[6] < 0.0f || values[7] < 0.0f || values[8] < 0.0f) {
+                    || values[6] < 0.0f || values[7] < 0.0f || values[8] < 0.0f
+                    || kind == 1 && values[12] < values[13]) {
                 throw new IOException("invalid SKATE authored light " + name);
             }
             Vec3 direction = new Vec3(values[3], values[4], values[5]);
-            if (kind != 0) {
+            if (kind == 1) {
                 if (direction.lengthSqr() < 1.0e-8) {
-                    throw new IOException("directional SKATE authored light has no direction: " + name);
+                    throw new IOException("SKATE spotlight has no direction: " + name);
                 }
                 direction = direction.normalize();
             }

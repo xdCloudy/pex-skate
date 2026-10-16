@@ -63,6 +63,40 @@ class WorldRecordTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Non-finite authored point"):
             encode_world_records([], [invalid_route])
 
+    def test_area_light_without_direction_is_preserved(self):
+        area = {
+            "name": "ceiling panel",
+            "kind": 2,
+            "position": [0, 2, 0],
+            "direction": [0, 0, 0],
+            "color": [1, 0.9, 0.8],
+            "intensity": 1,
+            "range": 8,
+            "radius": 1,
+            "inner_cos": 0,
+            "outer_cos": 0,
+        }
+        light_count, route_count, _payload = encode_world_records([area], [])
+
+        self.assertEqual((light_count, route_count), (1, 0))
+
+    def test_spotlight_rejects_reversed_cone_angles(self):
+        spotlight = {
+            "name": "bad spot",
+            "kind": 1,
+            "position": [0, 2, 0],
+            "direction": [0, -1, 0],
+            "color": [1, 1, 1],
+            "intensity": 1,
+            "range": 8,
+            "radius": 0,
+            "inner_cos": 0.4,
+            "outer_cos": 0.8,
+        }
+
+        with self.assertRaisesRegex(ValueError, "spotlight cone"):
+            encode_world_records([spotlight], [])
+
 
 if __name__ == "__main__":
     unittest.main()
