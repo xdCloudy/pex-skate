@@ -134,7 +134,12 @@ impl SkateSession {
                 eprintln!("PEX_SKATE_PROP_COLLISION triangles={count}");
             }
             Ok(_) => {}
-            Err(error) => eprintln!("PEX_SKATE_PROP_COLLISION skipped: {error}"),
+            Err(error) => {
+                return Err(format!(
+                    "could not load authored prop collision {}: {error}",
+                    prop_collision_path.display()
+                ));
+            }
         }
         let initial_pose = session
             .activate(spawn, heading)
@@ -484,7 +489,8 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
 #[cfg(test)]
 mod tests {
     use super::{
-        box_triangles, parse_prop_collision, quantize_rotation, respawn_pressed, to_engine_controls,
+        box_triangles, load_prop_collision, parse_prop_collision, quantize_rotation,
+        respawn_pressed, to_engine_controls,
     };
     use crate::physics::Controls;
 
@@ -626,5 +632,39 @@ mod tests {
             bytes.extend(value.to_le_bytes());
         }
         assert!(parse_prop_collision(&bytes).is_err());
+    }
+
+    #[test]
+    fn missing_optional_prop_collision_file_is_empty() {
+        let path = std::env::temp_dir().join(format!(
+            "pex-skate-missing-props-{}-{}.collision",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(!path.exists());
+        assert!(load_prop_collision(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn malformed_optional_prop_collision_file_is_rejected() {
+        let path = std::env::temp_dir().join(format!(
+            "pex-skate-invalid-props-{}-{}.collision",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"broken").unwrap();
+        let result = load_prop_collision(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            result
+                .unwrap_err()
+                .contains("invalid PEX prop collision header")
+        );
     }
 }
