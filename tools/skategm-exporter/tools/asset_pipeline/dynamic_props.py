@@ -18,6 +18,7 @@ from .map_writer import write
 from tools.owned_game.big import BigArchive
 
 MAX_PROP_COLLISION_TRIANGLES = 250_000
+MAX_PROP_COLLISION_INSTANCES = 8_192
 
 
 def sections(raw):
@@ -222,6 +223,38 @@ def write_collision_triangles(path, triangles):
     return count
 
 
+def write_collision_instances(path, instances):
+    """Write per-instance local colliders so the runtime can move DMO bodies."""
+    if len(instances) > MAX_PROP_COLLISION_INSTANCES:
+        path.unlink(missing_ok=True)
+        return 0
+    count = sum(len(triangles) for _, _, triangles in instances)
+    if count > MAX_PROP_COLLISION_TRIANGLES:
+        path.unlink(missing_ok=True)
+        return 0
+    temporary = path.with_suffix(path.suffix + '.new')
+    try:
+        with temporary.open('wb') as output:
+            output.write(struct.pack('<8sI', b'PEXCOL3\0', len(instances)))
+            for identity, transform, triangles in instances:
+                matrix = np.asarray(transform, dtype=np.float32)
+                values = np.asarray(triangles, dtype='<f4')
+                if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
+                    raise ValueError('Invalid authored prop instance transform')
+                if values.ndim != 3 or values.shape[1:] != (3, 3) or not np.isfinite(values).all():
+                    raise ValueError('Invalid authored prop instance collision triangles')
+                output.write(struct.pack('<Q16fI', identity, *matrix.reshape(-1), len(values)))
+                output.write(values.tobytes(order='C'))
+        if instances:
+            temporary.replace(path)
+        else:
+            temporary.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return count
+
+
 def catalog(cache_roots):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'vendor/utt'))
     import rx2_parser
@@ -297,6 +330,7 @@ def export(manifest_path, cache_roots, output, *, catalog_path=None):
     report = dict(map=district['map_name'], instances=[], unresolved=[], simulation='initial placement only')
     with tempfile.TemporaryDirectory(prefix='skate-dmo-') as work:
         root = Path(work); models = []; used = set(); collision_meshes = []
+        collision_instances = []
         collision_triangle_count = 0; collision_fallback = False
         for number, item in enumerate(placements.values()):
             template = templates.get(item['template_id'])
@@ -328,9 +362,15 @@ def export(manifest_path, cache_roots, output, *, catalog_path=None):
                 elif collision_triangle_count + len(mesh_triangles) > MAX_PROP_COLLISION_TRIANGLES:
                     collision_fallback = True
                     collision_meshes.clear()
+                    collision_instances.clear()
                     collision_triangle_count = 0
                 else:
                     collision_meshes.append(mesh_triangles)
+                    instance_matrix = np.asarray(transform, dtype=np.float64)
+                    inverse_instance = np.linalg.inv(instance_matrix[:3, :3])
+                    local_triangles = (mesh_triangles.reshape(-1, 3) - instance_matrix[3, :3]) @ inverse_instance
+                    local_triangles = np.asarray(local_triangles.reshape(-1, 3, 3), dtype='<f4')
+                    collision_instances.append((int(item['instance_id'], 16), transform, local_triangles))
                     collision_triangle_count += len(mesh_triangles)
         if models:
             manifest = dict(map_name=district['map_name'], district_name=district['district_name'],
@@ -348,11 +388,15 @@ def export(manifest_path, cache_roots, output, *, catalog_path=None):
             if collision_fallback:
                 report['collision_boxes'] = write_collision_boxes(collision_path, report['instances'])
                 report['collision_fallback'] = 'district bounds used because mesh collision exceeded conversion limits'
+                output.with_suffix('.instances').unlink(missing_ok=True)
             else:
                 report['collision_triangles'] = write_collision_triangles(collision_path, collision_meshes)
+                report['collision_instances'] = write_collision_instances(
+                    output.with_suffix('.instances'), collision_instances)
         else:
             output.unlink(missing_ok=True)
             output.with_suffix('.collision').unlink(missing_ok=True)
+            output.with_suffix('.instances').unlink(missing_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.with_suffix('.json').write_text(json.dumps(report, indent=2))
     return len(report['instances']), len(report['unresolved'])

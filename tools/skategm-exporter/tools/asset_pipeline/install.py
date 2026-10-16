@@ -33,6 +33,10 @@ def prop_manifest_entry(private,label):
     if collision.is_file():
         entry['collision_path']='private/native-props/'+collision.name
         entry['collision_sha256']=digest(collision)
+    instances=private/'native-props'/(label+'.instances')
+    if instances.is_file():
+        entry['instances_path']='private/native-props/'+instances.name
+        entry['instances_sha256']=digest(instances)
     return entry
 
 def remove_intermediate(path,root):

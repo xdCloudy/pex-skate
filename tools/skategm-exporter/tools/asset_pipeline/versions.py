@@ -38,7 +38,7 @@ def fingerprints(tools=None):
         # without invalidating maps when a dialog/lock/publication rule changes.
         for filename, names in (('asset_pipeline/asset_exports.py', {group}),
                                 ('asset_pipeline/install.py', {'extract'} | ({'convert_map', 'prop_manifest_entry'} if group == 'maps' else set())),
-                                ('asset_pipeline/dynamic_props.py', {'export', 'collision_bounds', 'collision_triangles', 'write_collision_boxes', 'write_collision_triangles'} if group == 'maps' else set())):
+                                ('asset_pipeline/dynamic_props.py', {'export', 'collision_bounds', 'collision_triangles', 'write_collision_boxes', 'write_collision_triangles', 'write_collision_instances'} if group == 'maps' else set())):
             path = tools/filename
             if path.is_file():
                 nodes = ast.parse(path.read_text()).body

@@ -159,6 +159,21 @@ try {
                     throw "Converted prop collision hash does not match maps.json: $($entry.props.collision_path)"
                 }
             }
+            if ($entry.props.instances_path) {
+                $expectedInstancesPath = "private/native-props/" + [System.IO.Path]::GetFileNameWithoutExtension($entry.path) + ".instances"
+                if ($entry.props.instances_path -ne $expectedInstancesPath -or
+                    $entry.props.instances_sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+                    throw "Conversion produced invalid prop instance metadata for $($entry.path)."
+                }
+                $instancesSource = Join-Path $stagePath ("assets\" + $entry.props.instances_path.Replace('/', '\'))
+                if (-not (Test-Path -LiteralPath $instancesSource -PathType Leaf)) {
+                    throw "Conversion did not produce $($entry.props.instances_path). Nothing was installed."
+                }
+                $instancesHash = (Get-FileHash -LiteralPath $instancesSource -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($instancesHash -ne $entry.props.instances_sha256.ToLowerInvariant()) {
+                    throw "Converted prop instance hash does not match maps.json: $($entry.props.instances_path)"
+                }
+            }
         }
     }
 

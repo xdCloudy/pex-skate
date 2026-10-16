@@ -10,8 +10,10 @@ use std::{fs, io::ErrorKind};
 
 const PROP_COLLISION_BOX_MAGIC: &[u8; 8] = b"PEXCOL1\0";
 const PROP_COLLISION_MESH_MAGIC: &[u8; 8] = b"PEXCOL2\0";
+const PROP_COLLISION_INSTANCES_MAGIC: &[u8; 8] = b"PEXCOL3\0";
 const MAX_PROP_COLLISION_BOXES: usize = 8192;
 const MAX_PROP_COLLISION_TRIANGLES: usize = 250_000;
+const MAX_PROP_COLLISION_INSTANCES: usize = 8192;
 
 pub const SKATER_BONE_NAMES: [&str; 36] = [
     "TRAJECTORY",
@@ -58,6 +60,12 @@ pub struct SkateSession {
     bones_root_relative: Option<bool>,
     previous_respawn: bool,
     previous_shove: bool,
+}
+
+#[derive(Clone, Debug)]
+struct PropCollisionInstance {
+    transform: [f32; 16],
+    triangles: Vec<[[f32; 3]; 3]>,
 }
 
 #[derive(Clone, Debug)]
@@ -132,7 +140,12 @@ impl SkateSession {
         let mut session = Session::new_with_skate_map(asset_root, &map)?;
         session.set_difficulty(load_difficulty(asset_root)?);
         let prop_collision_path = authored_prop_collision_path(asset_root, map_path)?;
-        match load_prop_collision(&prop_collision_path) {
+        let instance_path = prop_collision_path.with_extension("instances");
+        let collision = match load_prop_collision_instances(&instance_path)? {
+            Some(instances) => Ok(prop_collision_triangles(&instances)?),
+            None => load_prop_collision(&prop_collision_path),
+        };
+        match collision {
             Ok(triangles) if !triangles.is_empty() => {
                 let count = session.set_moving_collision(triangles)?;
                 eprintln!("PEX_SKATE_PROP_COLLISION triangles={count}");
@@ -363,6 +376,158 @@ fn load_prop_collision(path: &Path) -> Result<Vec<[[f32; 3]; 3]>, String> {
     parse_prop_collision(&bytes)
 }
 
+fn load_prop_collision_instances(
+    path: &Path,
+) -> Result<Option<Vec<PropCollisionInstance>>, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("could not read {}: {error}", path.display())),
+    };
+    parse_prop_collision_instances(&bytes).map(Some)
+}
+
+fn parse_prop_collision_instances(bytes: &[u8]) -> Result<Vec<PropCollisionInstance>, String> {
+    if bytes.len() < 12 || &bytes[..8] != PROP_COLLISION_INSTANCES_MAGIC {
+        return Err("invalid PEX prop collision instance header".into());
+    }
+    let count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    if count > MAX_PROP_COLLISION_INSTANCES {
+        return Err("invalid PEX prop collision instance count".into());
+    }
+    let mut cursor = 12usize;
+    let mut instances = Vec::with_capacity(count);
+    let mut total_triangles = 0usize;
+    let mut identities = std::collections::HashSet::with_capacity(count);
+    for instance in 0..count {
+        const RECORD_BYTES: usize = 8 + 16 * 4 + 4;
+        let header_end = cursor
+            .checked_add(RECORD_BYTES)
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| "truncated PEX prop collision instance record".to_owned())?;
+        let identity = u64::from_le_bytes(bytes[cursor..cursor + 8].try_into().unwrap());
+        if !identities.insert(identity) {
+            return Err(format!(
+                "duplicate PEX prop collision instance id {identity}"
+            ));
+        }
+        let mut matrix = [0.0f32; 16];
+        for (index, raw) in bytes[cursor + 8..cursor + 72].chunks_exact(4).enumerate() {
+            matrix[index] = f32::from_le_bytes(raw.try_into().unwrap());
+        }
+        let triangle_count =
+            u32::from_le_bytes(bytes[cursor + 72..header_end].try_into().unwrap()) as usize;
+        if triangle_count > MAX_PROP_COLLISION_TRIANGLES
+            || total_triangles.saturating_add(triangle_count) > MAX_PROP_COLLISION_TRIANGLES
+        {
+            return Err(format!("invalid PEX prop collision instance {instance}"));
+        }
+        validate_prop_transform(&matrix)
+            .map_err(|_| format!("invalid PEX prop collision transform {instance}"))?;
+        cursor = header_end;
+        let payload_bytes = triangle_count
+            .checked_mul(36)
+            .ok_or_else(|| "PEX prop collision triangle count overflow".to_owned())?;
+        let payload_end = cursor
+            .checked_add(payload_bytes)
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| "truncated PEX prop collision triangles".to_owned())?;
+        let mut local_triangles = Vec::with_capacity(triangle_count);
+        for record in bytes[cursor..payload_end].chunks_exact(36) {
+            let mut local_triangle = [[0.0f32; 3]; 3];
+            for vertex in 0..3 {
+                local_triangle[vertex] = std::array::from_fn(|axis| {
+                    f32::from_le_bytes(
+                        record[(vertex * 3 + axis) * 4..(vertex * 3 + axis + 1) * 4]
+                            .try_into()
+                            .unwrap(),
+                    )
+                });
+            }
+            let triangle = transform_prop_triangle(local_triangle, &matrix)?;
+            let [a, b, c] = triangle;
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let cross = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            if cross.iter().map(|value| value * value).sum::<f32>() < 1e-12 {
+                return Err(format!(
+                    "degenerate PEX prop collision triangle in instance {instance}"
+                ));
+            }
+            local_triangles.push(local_triangle);
+        }
+        total_triangles += triangle_count;
+        instances.push(PropCollisionInstance {
+            transform: matrix,
+            triangles: local_triangles,
+        });
+        cursor = payload_end;
+    }
+    if cursor != bytes.len() {
+        return Err("unexpected trailing data in PEX prop collision instances".into());
+    }
+    Ok(instances)
+}
+
+fn validate_prop_transform(matrix: &[f32; 16]) -> Result<(), String> {
+    if matrix.iter().any(|value| !value.is_finite()) {
+        return Err("non-finite transform".into());
+    }
+    let determinant = matrix[0] * (matrix[5] * matrix[10] - matrix[6] * matrix[9])
+        - matrix[1] * (matrix[4] * matrix[10] - matrix[6] * matrix[8])
+        + matrix[2] * (matrix[4] * matrix[9] - matrix[5] * matrix[8]);
+    if !determinant.is_finite()
+        || determinant.abs() < 1e-8
+        || matrix[3].abs() > 1e-5
+        || matrix[7].abs() > 1e-5
+        || matrix[11].abs() > 1e-5
+        || (matrix[15] - 1.0).abs() > 1e-5
+    {
+        return Err("non-affine or singular transform".into());
+    }
+    Ok(())
+}
+
+fn transform_prop_triangle(
+    local: [[f32; 3]; 3],
+    matrix: &[f32; 16],
+) -> Result<[[f32; 3]; 3], String> {
+    let mut world = [[0.0; 3]; 3];
+    for vertex in 0..3 {
+        let point = local[vertex];
+        world[vertex] = [
+            point[0] * matrix[0] + point[1] * matrix[4] + point[2] * matrix[8] + matrix[12],
+            point[0] * matrix[1] + point[1] * matrix[5] + point[2] * matrix[9] + matrix[13],
+            point[0] * matrix[2] + point[1] * matrix[6] + point[2] * matrix[10] + matrix[14],
+        ];
+        if world[vertex]
+            .iter()
+            .any(|value| !value.is_finite() || value.abs() > 100_000.0)
+        {
+            return Err("invalid PEX prop collision vertex".into());
+        }
+    }
+    Ok(world)
+}
+
+fn prop_collision_triangles(
+    instances: &[PropCollisionInstance],
+) -> Result<Vec<[[f32; 3]; 3]>, String> {
+    instances
+        .iter()
+        .flat_map(|instance| {
+            instance
+                .triangles
+                .iter()
+                .map(|triangle| transform_prop_triangle(*triangle, &instance.transform))
+        })
+        .collect()
+}
+
 fn parse_prop_collision(bytes: &[u8]) -> Result<Vec<[[f32; 3]; 3]>, String> {
     if bytes.len() < 12 {
         return Err("invalid PEX prop collision header".into());
@@ -531,7 +696,8 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
 mod tests {
     use super::{
         box_triangles, load_difficulty, load_prop_collision, parse_difficulty,
-        parse_prop_collision, pressed_edge, quantize_rotation, to_engine_controls,
+        parse_prop_collision, parse_prop_collision_instances, pressed_edge,
+        prop_collision_triangles, quantize_rotation, to_engine_controls,
     };
     use crate::physics::Controls;
 
@@ -715,6 +881,42 @@ mod tests {
             bytes.extend(value.to_le_bytes());
         }
         assert!(parse_prop_collision(&bytes).is_err());
+    }
+
+    #[test]
+    fn prop_collision_instances_transform_local_triangles_and_check_ids() {
+        let mut bytes = b"PEXCOL3\0".to_vec();
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(7u64.to_le_bytes());
+        let mut matrix = [0.0f32; 16];
+        matrix[0] = 1.0;
+        matrix[5] = 1.0;
+        matrix[10] = 1.0;
+        matrix[12] = 10.0;
+        matrix[13] = 20.0;
+        matrix[14] = 30.0;
+        matrix[15] = 1.0;
+        for value in matrix {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend(1u32.to_le_bytes());
+        for value in [0.0f32, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 0.0] {
+            bytes.extend(value.to_le_bytes());
+        }
+        let mut instances = parse_prop_collision_instances(&bytes).unwrap();
+        assert_eq!(
+            prop_collision_triangles(&instances).unwrap(),
+            vec![[[10.0, 20.0, 30.0], [12.0, 20.0, 30.0], [10.0, 23.0, 30.0]]]
+        );
+        instances[0].transform[12] += 2.0;
+        assert_eq!(
+            prop_collision_triangles(&instances).unwrap()[0][0],
+            [12.0, 20.0, 30.0]
+        );
+        let record = bytes[12..].to_vec();
+        bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
+        bytes.extend(record);
+        assert!(parse_prop_collision_instances(&bytes).is_err());
     }
 
     #[test]
