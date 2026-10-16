@@ -9,6 +9,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.Identifier;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
@@ -121,9 +123,12 @@ final class SkateMapModel {
         matrices.translate(-camera.x, -camera.y, -camera.z);
         for (Primitive primitive : current.primitives) {
             if (primitive.distanceSquared(camera) > DRAW_DISTANCE * DRAW_DISTANCE) continue;
+            BlockPos lightPosition = primitive.lightSamplePosition();
+            int light = client.level.getBrightness(LightLayer.SKY, lightPosition) << 20
+                    | client.level.getBrightness(LightLayer.BLOCK, lightPosition) << 4;
             context.submitNodeCollector().submitCustomGeometry(
                     matrices, RenderTypes.entityCutout(primitive.texture),
-                    (pose, vertices) -> primitive.draw(pose, vertices));
+                    (pose, vertices) -> primitive.draw(pose, vertices, light));
         }
     }
 
@@ -378,7 +383,14 @@ final class SkateMapModel {
             return distance;
         }
 
-        private void draw(PoseStack.Pose pose, VertexConsumer output) {
+        private BlockPos lightSamplePosition() {
+            return BlockPos.containing(
+                    (bounds[0] + bounds[3]) * 0.5,
+                    (bounds[1] + bounds[4]) * 0.5,
+                    (bounds[2] + bounds[5]) * 0.5);
+        }
+
+        private void draw(PoseStack.Pose pose, VertexConsumer output, int light) {
             Vector3f normal = new Vector3f();
             for (int index : indices) {
                 int point = index * 3;
@@ -388,7 +400,7 @@ final class SkateMapModel {
                 output.addVertex(pose, positions[point], positions[point + 1], positions[point + 2])
                         .setColor(color[0], color[1], color[2], color[3])
                         .setUv(uv[texCoord], uv[texCoord + 1])
-                        .setLight(0x00F000F0)
+                        .setLight(light)
                         .setNormal(normal.x, normal.y, normal.z);
             }
         }
