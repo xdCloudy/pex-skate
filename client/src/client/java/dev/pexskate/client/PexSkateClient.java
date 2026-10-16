@@ -88,7 +88,7 @@ public final class PexSkateClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
             if (payload.version() == 4 || payload.version() == 5 || payload.version() == 6 || payload.version() == 7 || payload.version() == 8 || payload.version() == 9) {
                 context.client().execute(() -> {
-                    if (payload.version() >= 9 && context.client().player != null
+                    if (payload.version() >= 9 && payload.active() && context.client().player != null
                             && context.client().player.getId() == payload.entityId()) {
                         acknowledgeControls(payload.acknowledgedControlSequence());
                     }
@@ -235,6 +235,10 @@ public final class PexSkateClient implements ClientModInitializer {
         } else if (previousCamera != null) {
             client.options.setCameraType(previousCamera);
             previousCamera = null;
+        }
+        if (!skating) {
+            outstandingControls.clear();
+            SkatePoseCache.resetInputRoundTrip();
         }
     }
 
