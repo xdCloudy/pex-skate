@@ -70,7 +70,7 @@ The server command `/skate` is also available for server-side toggling. The defa
 
 ## Controls
 
-PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keyboard mappings follow [SkateGM's documented keyboard layout](https://github.com/the-schwilliam/SkateGM#keyboard) where the PEX port supports the action. A standard gamepad recognized by GLFW is polled directly; for non-Xbox controllers, use a mapping/remapper that exposes a standard gamepad layout.
+PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keyboard mappings follow [SkateGM's documented keyboard layout](https://github.com/the-schwilliam/SkateGM#keyboard) where the PEX port supports the action. A standard gamepad recognized by SDL3 is polled directly; for controllers SDL3 does not recognize, use a mapping/remapper that exposes a standard gamepad layout.
 
 | Action | Keyboard | Standard gamepad | PEX Skate status |
 | --- | --- | --- | --- |
@@ -94,7 +94,7 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | Skate 3 music | Z + Ctrl/arrows | LB + right stick | Not implemented in PEX Skate |
 | Settings / map / park editor / replays | — | LB + A / Y / B / RB | Not implemented in PEX Skate |
 
-The Minecraft port currently wires only toggle, pushes, brake, steering/pumping, and Flick-It trick axes into the simulation. The additional rows document SkateGM's keyboard/controller layout; their menus, grabs, dismount, interaction, respawn, items, maps, and minigames are not part of this PEX mod yet. The controller mapping uses the first connected device that GLFW recognizes as a standard gamepad.
+The Minecraft port currently wires only toggle, pushes, brake, steering/pumping, and Flick-It trick axes into the simulation. The additional rows document SkateGM's keyboard/controller layout; their menus, grabs, dismount, interaction, respawn, items, maps, and minigames are not part of this PEX mod yet. The controller mapping uses the first connected device that SDL3 recognizes as a standard gamepad.
 
 ## Protocol
 

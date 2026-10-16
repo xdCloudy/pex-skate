@@ -2,9 +2,11 @@ package dev.pexskate.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.math.Transformation;
-import org.lwjgl.glfw.GLFW;
-import org.lwjgl.glfw.GLFWGamepadState;
+import org.lwjgl.sdl.SDLGamepad;
+import org.lwjgl.sdl.SDLInit;
+import org.lwjgl.system.MemoryUtil;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -23,6 +25,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.network.chat.Component;
 import java.util.HashMap;
 import java.util.Map;
+import java.nio.IntBuffer;
 
 public final class PexSkateClient implements ClientModInitializer {
     private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(
@@ -41,7 +44,8 @@ public final class PexSkateClient implements ClientModInitializer {
 
     private boolean skating;
     private CameraType previousCamera;
-    private final GLFWGamepadState gamepadState = GLFWGamepadState.create();
+    private long gamepadHandle;
+    private boolean gamepadSubsystemReady;
     private static final Map<Integer, ItemDisplay> BOARDS = new HashMap<>();
     private static final Map<Integer, Long> LAST_SEEN = new HashMap<>();
     private static final Identifier BOARD_MODEL = Identifier.fromNamespaceAndPath("pexskate", "skateboard");
@@ -53,6 +57,7 @@ public final class PexSkateClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        gamepadSubsystemReady = SDLInit.SDL_InitSubSystem(SDLInit.SDL_INIT_GAMEPAD);
         PayloadTypeRegistry.serverboundPlay().register(ControlPayload.TYPE, ControlPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(SkateStatePayload.TYPE, SkateStatePayload.CODEC);
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
@@ -70,6 +75,16 @@ public final class PexSkateClient implements ClientModInitializer {
             }
             skating = false;
             previousCamera = null;
+        });
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+            if (gamepadHandle != 0L) {
+                SDLGamepad.SDL_CloseGamepad(gamepadHandle);
+                gamepadHandle = 0L;
+            }
+            if (gamepadSubsystemReady) {
+                SDLInit.SDL_QuitSubSystem(SDLInit.SDL_INIT_GAMEPAD);
+                gamepadSubsystemReady = false;
+            }
         });
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
     }
@@ -176,20 +191,40 @@ public final class PexSkateClient implements ClientModInitializer {
     }
 
     private Gamepad readGamepad() {
-        for (int joystick = GLFW.GLFW_JOYSTICK_1; joystick <= GLFW.GLFW_JOYSTICK_LAST; joystick++) {
-            if (GLFW.glfwJoystickPresent(joystick) && GLFW.glfwJoystickIsGamepad(joystick)
-                    && GLFW.glfwGetGamepadState(joystick, gamepadState)) {
-                return new Gamepad(
-                        deadzone(gamepadState.axes(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X)),
-                        -deadzone(gamepadState.axes(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y)),
-                        deadzone(gamepadState.axes(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_X)),
-                        -deadzone(gamepadState.axes(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y)),
-                        gamepadState.buttons(GLFW.GLFW_GAMEPAD_BUTTON_A) == GLFW.GLFW_PRESS,
-                        gamepadState.buttons(GLFW.GLFW_GAMEPAD_BUTTON_X) == GLFW.GLFW_PRESS,
-                        gamepadState.buttons(GLFW.GLFW_GAMEPAD_BUTTON_B) == GLFW.GLFW_PRESS);
+        if (!gamepadSubsystemReady) return Gamepad.NONE;
+
+        if (gamepadHandle != 0L && !SDLGamepad.SDL_GamepadConnected(gamepadHandle)) {
+            SDLGamepad.SDL_CloseGamepad(gamepadHandle);
+            gamepadHandle = 0L;
+        }
+        if (gamepadHandle == 0L) {
+            if (!SDLGamepad.SDL_HasGamepad()) return Gamepad.NONE;
+            IntBuffer gamepads = SDLGamepad.SDL_GetGamepads();
+            if (gamepads != null) {
+                try {
+                    for (int i = 0; i < gamepads.remaining(); i++) {
+                        gamepadHandle = SDLGamepad.SDL_OpenGamepad(gamepads.get(gamepads.position() + i));
+                        if (gamepadHandle != 0L) break;
+                    }
+                } finally {
+                    MemoryUtil.memFree(gamepads);
+                }
             }
         }
-        return Gamepad.NONE;
+        if (gamepadHandle == 0L) return Gamepad.NONE;
+
+        return new Gamepad(
+                deadzone(axis(SDLGamepad.SDL_GetGamepadAxis(gamepadHandle, SDLGamepad.SDL_GAMEPAD_AXIS_LEFTX))),
+                -deadzone(axis(SDLGamepad.SDL_GetGamepadAxis(gamepadHandle, SDLGamepad.SDL_GAMEPAD_AXIS_LEFTY))),
+                deadzone(axis(SDLGamepad.SDL_GetGamepadAxis(gamepadHandle, SDLGamepad.SDL_GAMEPAD_AXIS_RIGHTX))),
+                -deadzone(axis(SDLGamepad.SDL_GetGamepadAxis(gamepadHandle, SDLGamepad.SDL_GAMEPAD_AXIS_RIGHTY))),
+                SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_SOUTH),
+                SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_WEST),
+                SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_EAST));
+    }
+
+    private static float axis(short value) {
+        return Math.max(-1.0f, value / 32767.0f);
     }
 
     private static float keyAxis(boolean positive, boolean negative) {
