@@ -261,7 +261,8 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
     const X: u16 = 1 << 14;
     let axis = |value: f32| (value.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
     bridge::Controls {
-        buttons: (if controls.push { A } else { 0 })
+        buttons: u16::from(controls.dpad & 0x0f)
+            | (if controls.push { A } else { 0 })
             | (if controls.brake { B } else { 0 })
             | (if controls.push_left { X } else { 0 }),
         triggers: controls.triggers,
@@ -283,6 +284,7 @@ mod tests {
             right_x: -1.0,
             right_y: 1.0,
             triggers: [96, 255],
+            dpad: 0,
             push: true,
             push_left: true,
             brake: true,
@@ -292,5 +294,14 @@ mod tests {
         assert_eq!(input.left[0], -16_384);
         assert_eq!(input.left[1], i16::MAX);
         assert_eq!(input.right, [-i16::MAX, i16::MAX]);
+    }
+
+    #[test]
+    fn dpad_bits_reach_the_stock_gameplay_gesture_input() {
+        let input = to_engine_controls(Controls {
+            dpad: 0b1010,
+            ..Controls::default()
+        });
+        assert_eq!(input.buttons & 0x0f, 0b1010);
     }
 }

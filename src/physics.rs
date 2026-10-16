@@ -8,13 +8,14 @@ pub struct Controls {
     pub right_x: f32,
     pub right_y: f32,
     pub triggers: [u8; 2],
+    pub dpad: u8,
     pub push: bool,
     pub push_left: bool,
     pub brake: bool,
 }
 
 impl Controls {
-    /// Decode v1 legacy, v2 stick, and v3 trigger-aware controller packets.
+    /// Decode v1 legacy, v2 stick, v3 trigger-aware, and v4 D-pad packets.
     pub fn decode(packet: &[u8]) -> Option<Self> {
         match packet {
             [1, flags, forward, steer] if flags & !0x1f == 0 => Some(Self {
@@ -29,6 +30,7 @@ impl Controls {
                     0.0
                 },
                 triggers: [0; 2],
+                dpad: 0,
                 push: flags & 1 != 0,
                 push_left: false,
                 brake: flags & 2 != 0,
@@ -39,6 +41,7 @@ impl Controls {
                 right_x: f32::from(*right_x as i8) / 127.0,
                 right_y: f32::from(*right_y as i8) / 127.0,
                 triggers: [0; 2],
+                dpad: 0,
                 push: flags & 1 != 0,
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
@@ -58,6 +61,27 @@ impl Controls {
                 right_x: f32::from(*right_x as i8) / 127.0,
                 right_y: f32::from(*right_y as i8) / 127.0,
                 triggers: [*left_trigger, *right_trigger],
+                dpad: 0,
+                push: flags & 1 != 0,
+                push_left: flags & 2 != 0,
+                brake: flags & 4 != 0,
+            }),
+            [
+                4,
+                flags,
+                left_trigger,
+                right_trigger,
+                forward,
+                steer,
+                right_x,
+                right_y,
+            ] if flags & !0x7f == 0 => Some(Self {
+                forward: f32::from(*forward as i8) / 127.0,
+                steer: f32::from(*steer as i8) / 127.0,
+                right_x: f32::from(*right_x as i8) / 127.0,
+                right_y: f32::from(*right_y as i8) / 127.0,
+                triggers: [*left_trigger, *right_trigger],
+                dpad: (flags >> 3) & 0x0f,
                 push: flags & 1 != 0,
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
@@ -78,6 +102,7 @@ mod tests {
         assert!(Controls::decode(b"\x02\x00\x00\x00").is_none());
         assert!(Controls::decode(b"\x02\x80\x00\x00\x00\x00").is_none());
         assert!(Controls::decode(b"\x03\x80\x00\x00\x00\x00\x00\x00").is_none());
+        assert!(Controls::decode(b"\x04\x80\x00\x00\x00\x00\x00\x00").is_none());
     }
 
     #[test]
@@ -105,7 +130,15 @@ mod tests {
         let controls = Controls::decode(&[3, 1, 192, 255, 0, 0, 64, -127_i8 as u8]).unwrap();
         assert!(controls.push);
         assert_eq!(controls.triggers, [192, 255]);
+        assert_eq!(controls.dpad, 0);
         assert_eq!(controls.right_x, 64.0 / 127.0);
         assert_eq!(controls.right_y, -1.0);
+    }
+
+    #[test]
+    fn decodes_v4_dpad_directions_and_grab_triggers() {
+        let controls = Controls::decode(&[4, 0b0101_0010, 64, 192, 0, 0, 0, 0]).unwrap();
+        assert_eq!(controls.dpad, 0b1010);
+        assert_eq!(controls.triggers, [64, 192]);
     }
 }

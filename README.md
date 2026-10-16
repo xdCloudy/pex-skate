@@ -95,7 +95,7 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | Grab with left / right hand | Q / E | Left / right trigger | Supported |
 | Get on/off board | F | Skate 3's in-game board controls | Not implemented in PEX Skate |
 | Interact | C | Skate 3's in-game interact control | Not implemented in PEX Skate |
-| D-pad | I / K / U / O | D-pad | Not implemented in PEX Skate |
+| Gameplay gestures | I (up), K (down), U (left), O (right) | D-pad | Supported |
 | Menu / start / back | Z / Enter / Backspace | SkateGM menu controls | Not implemented in PEX Skate |
 | Respawn / exit free camera | R / L | LB + X respawns | Not implemented in PEX Skate |
 | Rocket board / use item | Ctrl / Alt | Right-stick click / left-stick click | Not implemented in PEX Skate |
@@ -105,11 +105,11 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | Skate 3 music | Z + Ctrl/arrows | LB + right stick | Not implemented in PEX Skate |
 | Settings / map / park editor / replays | — | LB + A / Y / B / RB | Not implemented in PEX Skate |
 
-SkateGM documents the broader original keyboard and controller layout; the table marks which actions this PEX port currently handles. The supported PEX Skate keys can be rebound under Controls → Key Binds → PEX Skate. While skating, Q/E are reserved for grabs and Minecraft's matching drop/inventory actions are suppressed. For a gamepad, SDL3 reads the first connected standard gamepad. The Minecraft port currently sends Skate mode toggle, pushes, brake, steering/pumping, Flick-It trick axes, and grab triggers to the simulation. The remaining SkateGM actions are reference mappings only and are not implemented in PEX Skate yet.
+SkateGM documents the broader original keyboard and controller layout; the table marks which actions this PEX port currently handles. The supported PEX Skate keys can be rebound under Controls → Key Binds → PEX Skate. While skating, Q/E are reserved for grabs and Minecraft's matching drop/inventory actions are suppressed. For a gamepad, SDL3 reads the first connected standard gamepad. The Minecraft port currently sends Skate mode toggle, pushes, brake, steering/pumping, Flick-It trick axes, grab triggers, and D-pad gesture inputs to the simulation. The remaining SkateGM actions are reference mappings only and are not implemented in PEX Skate yet.
 
 ## Protocol
 
-The client sends a `pexskate:control` custom payload once per client tick while Skate mode is active. The v3 body carries action flags, left/right trigger pressure, and four signed stick axes; triggers feed the engine's grab inputs, left-stick X steers, and right-stick X/Y drive Skate 3's Flick-It/trick recognition. The server accepts the original v1 and v2 packets for compatibility. Server state v4 includes the engine root, board position/quaternion, velocity, score values, clean/sketchy flags, UTF-8 trick display name, hips position, a 36-joint presence mask and quantized offsets, plus the camera offset, forward/up vectors and field of view. The client interpolates the skeletal and camera snapshots.
+The client sends a `pexskate:control` custom payload once per client tick while Skate mode is active. The v4 body carries action flags, four D-pad directions, left/right trigger pressure, and four signed stick axes; triggers feed the engine's grab inputs, D-pad directions drive Skate 3 gameplay gestures, left-stick X steers, and right-stick X/Y drive Skate 3's Flick-It/trick recognition. The server accepts v1, v2, and v3 packets for compatibility. Server state v4 includes the engine root, board position/quaternion, velocity, score values, clean/sketchy flags, UTF-8 trick display name, hips position, a 36-joint presence mask and quantized offsets, plus the camera offset, forward/up vectors and field of view. The client interpolates the skeletal and camera snapshots.
 
 The server clears controls after 250 ms without a fresh client packet, removes player state on disconnect, and sends engine state to clients at no more than 20 updates per second per skater. The local Minecraft skin rig uses a simplified six-part retarget of the engine skeleton; the original Skate 3 mesh and detailed facial/hand/foot animation are not loaded.
 
