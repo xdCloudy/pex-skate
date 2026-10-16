@@ -57,6 +57,7 @@ pub struct SkateSession {
     bone_names: Vec<String>,
     bones_root_relative: Option<bool>,
     previous_respawn: bool,
+    previous_shove: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -116,6 +117,7 @@ impl SkateSession {
             bone_names: initial_pose.names,
             bones_root_relative: None,
             previous_respawn: false,
+            previous_shove: false,
         })
     }
 
@@ -149,18 +151,23 @@ impl SkateSession {
             bone_names: initial_pose.names,
             bones_root_relative: None,
             previous_respawn: false,
+            previous_shove: false,
         })
     }
 
     /// One deterministic 60 Hz engine step. The caller owns the server tick
     /// accumulator and must not call this directly from client packet cadence.
     pub fn tick(&mut self, controls: Controls) -> Result<SkatePose, String> {
-        if respawn_pressed(controls.respawn, self.previous_respawn) {
+        if pressed_edge(controls.respawn, self.previous_respawn) {
             if let Err(error) = self.session.return_to_checkpoint() {
                 eprintln!("PEX Skate checkpoint respawn unavailable: {error}");
             }
         }
         self.previous_respawn = controls.respawn;
+        if pressed_edge(controls.shove, self.previous_shove) {
+            self.session.shove(18);
+        }
+        self.previous_shove = controls.shove;
         self.session.tick(to_engine_controls(controls))?;
         Ok(self.pose())
     }
@@ -425,7 +432,7 @@ fn box_triangles(min: [f32; 3], max: [f32; 3]) -> [[[f32; 3]; 3]; 12] {
     ]
 }
 
-fn respawn_pressed(current: bool, previous: bool) -> bool {
+fn pressed_edge(current: bool, previous: bool) -> bool {
     current && !previous
 }
 
@@ -489,8 +496,8 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
 #[cfg(test)]
 mod tests {
     use super::{
-        box_triangles, load_prop_collision, parse_prop_collision, quantize_rotation,
-        respawn_pressed, to_engine_controls,
+        box_triangles, load_prop_collision, parse_prop_collision, pressed_edge, quantize_rotation,
+        to_engine_controls,
     };
     use crate::physics::Controls;
 
@@ -509,6 +516,7 @@ mod tests {
             dismount: false,
             session_modifier: false,
             respawn: false,
+            shove: false,
         });
         assert_eq!(input.buttons, (1 << 12) | (1 << 13) | (1 << 14));
         assert_eq!(input.triggers, [96, 255]);
@@ -549,7 +557,20 @@ mod tests {
         let mut previous = false;
         let mut presses = 0;
         for current in [false, true, true, true, false, false, true, false] {
-            if respawn_pressed(current, previous) {
+            if pressed_edge(current, previous) {
+                presses += 1;
+            }
+            previous = current;
+        }
+        assert_eq!(presses, 2);
+    }
+
+    #[test]
+    fn shove_fires_once_per_press_and_again_after_release() {
+        let mut previous = false;
+        let mut presses = 0;
+        for current in [false, true, true, false, true, false] {
+            if pressed_edge(current, previous) {
                 presses += 1;
             }
             previous = current;

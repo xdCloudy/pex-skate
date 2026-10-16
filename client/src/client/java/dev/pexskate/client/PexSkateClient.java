@@ -59,6 +59,7 @@ public final class PexSkateClient implements ClientModInitializer {
     private static final KeyMapping DISMOUNT = flickKey("key.pexskate.dismount", InputConstants.KEY_F);
     private static final KeyMapping SESSION_MODIFIER = flickKey("key.pexskate.session_modifier", InputConstants.KEY_LCONTROL);
     private static final KeyMapping RESPAWN = flickKey("key.pexskate.respawn", InputConstants.KEY_R);
+    private static final KeyMapping SHOVE = flickKey("key.pexskate.shove", InputConstants.KEY_V);
 
     private static volatile boolean skateModeActive;
     private boolean skating;
@@ -268,10 +269,11 @@ public final class PexSkateClient implements ClientModInitializer {
         flags |= dpad << 3;
         boolean respawn = RESPAWN.isDown() || (pad.sessionModifier() && pad.pushLeft());
         byte modifiers = (byte) ((SESSION_MODIFIER.isDown() || pad.sessionModifier() ? 1 : 0)
-                | (respawn ? 2 : 0));
+                | (respawn ? 2 : 0)
+                | (SHOVE.isDown() || pad.shove() ? 4 : 0));
 
         ClientPlayNetworking.send(new ControlPayload(
-                (byte) 7, (byte) flags,
+                (byte) 8, (byte) flags,
                 quantizeTrigger(leftTrigger), quantizeTrigger(rightTrigger),
                 quantize(pad.forward()), quantize(steer), quantize(rightX), quantize(rightY),
                 modifiers));
@@ -312,7 +314,8 @@ public final class PexSkateClient implements ClientModInitializer {
                 SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_EAST),
                 dpadButtons(),
                 SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_NORTH),
-                SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_LEFT_SHOULDER));
+                SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_LEFT_SHOULDER),
+                SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER));
     }
 
     private int dpadButtons() {
@@ -357,9 +360,9 @@ public final class PexSkateClient implements ClientModInitializer {
     private record Gamepad(float leftX, float forward, float rightX, float rightY,
                            float leftTrigger, float rightTrigger,
                            boolean pushRight, boolean pushLeft, boolean brake, int dpad,
-                           boolean dismount, boolean sessionModifier) {
+                           boolean dismount, boolean sessionModifier, boolean shove) {
         private static final Gamepad NONE = new Gamepad(
-                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false, false, false, 0, false, false);
+                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false, false, false, 0, false, false, false);
     }
 
     private static void clearStaleBoards(Minecraft client) {

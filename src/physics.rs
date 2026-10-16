@@ -15,6 +15,7 @@ pub struct Controls {
     pub dismount: bool,
     pub session_modifier: bool,
     pub respawn: bool,
+    pub shove: bool,
 }
 
 impl Controls {
@@ -40,6 +41,7 @@ impl Controls {
                 dismount: false,
                 session_modifier: false,
                 respawn: false,
+                shove: false,
             }),
             [2, flags, forward, steer, right_x, right_y] if flags & !0x07 == 0 => Some(Self {
                 forward: f32::from(*forward as i8) / 127.0,
@@ -54,6 +56,7 @@ impl Controls {
                 dismount: false,
                 session_modifier: false,
                 respawn: false,
+                shove: false,
             }),
             [
                 3,
@@ -77,6 +80,7 @@ impl Controls {
                 dismount: false,
                 session_modifier: false,
                 respawn: false,
+                shove: false,
             }),
             [
                 4,
@@ -100,6 +104,7 @@ impl Controls {
                 dismount: false,
                 session_modifier: false,
                 respawn: false,
+                shove: false,
             }),
             [
                 5,
@@ -123,6 +128,7 @@ impl Controls {
                 dismount: flags & 0x80 != 0,
                 session_modifier: false,
                 respawn: false,
+                shove: false,
             }),
             [
                 6,
@@ -147,6 +153,7 @@ impl Controls {
                 dismount: flags & 0x80 != 0,
                 session_modifier: modifiers & 1 != 0,
                 respawn: false,
+                shove: false,
             }),
             [
                 7,
@@ -171,6 +178,32 @@ impl Controls {
                 dismount: flags & 0x80 != 0,
                 session_modifier: modifiers & 1 != 0,
                 respawn: modifiers & 2 != 0,
+                shove: false,
+            }),
+            [
+                8,
+                flags,
+                left_trigger,
+                right_trigger,
+                forward,
+                steer,
+                right_x,
+                right_y,
+                modifiers,
+            ] if modifiers & !7 == 0 => Some(Self {
+                forward: f32::from(*forward as i8) / 127.0,
+                steer: f32::from(*steer as i8) / 127.0,
+                right_x: f32::from(*right_x as i8) / 127.0,
+                right_y: f32::from(*right_y as i8) / 127.0,
+                triggers: [*left_trigger, *right_trigger],
+                dpad: (flags >> 3) & 0x0f,
+                push: flags & 1 != 0,
+                push_left: flags & 2 != 0,
+                brake: flags & 4 != 0,
+                dismount: flags & 0x80 != 0,
+                session_modifier: modifiers & 1 != 0,
+                respawn: modifiers & 2 != 0,
+                shove: modifiers & 4 != 0,
             }),
             _ => None,
         }
@@ -249,6 +282,16 @@ mod tests {
         let controls = Controls::decode(&[7, 0, 0, 0, 0, 0, 0, 0, 3]).unwrap();
         assert!(controls.session_modifier);
         assert!(controls.respawn);
+        assert!(!controls.shove);
         assert!(Controls::decode(&[7, 0, 0, 0, 0, 0, 0, 0, 4]).is_none());
+    }
+
+    #[test]
+    fn decodes_v8_shove_action_and_rejects_reserved_modifier_bits() {
+        let controls = Controls::decode(&[8, 0, 0, 0, 0, 0, 0, 0, 7]).unwrap();
+        assert!(controls.session_modifier);
+        assert!(controls.respawn);
+        assert!(controls.shove);
+        assert!(Controls::decode(&[8, 0, 0, 0, 0, 0, 0, 0, 8]).is_none());
     }
 }

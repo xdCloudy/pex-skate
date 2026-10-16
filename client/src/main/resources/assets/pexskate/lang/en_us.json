@@ -18,5 +18,6 @@
   "key.pexskate.dismount": "Skate Get On/Off Board",
   "key.pexskate.session_modifier": "Skate Session Marker Modifier",
   "key.pexskate.respawn": "Skate Respawn to Checkpoint",
+  "key.pexskate.shove": "Skate Shove/Punch",
   "key.category.pexskate.controls": "PEX Skate"
 }
