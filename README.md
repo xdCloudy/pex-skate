@@ -80,7 +80,7 @@ The `--xex` argument accepts either the ISO or `default.xex` from an already ext
 
 The server command `/skate` is also available for server-side toggling. The default camera is switched to third-person while the client mode is active.
 
-The server physics difficulty can be selected for all new sessions with `<server>/plugins/data/pex-skate/settings/difficulty.txt`. Set it to `easy`, `normal`, or `hardcore` (case-insensitive); if the file is absent, the engine's Easy mode is used. Restart the PEX server after changing the setting.
+The server physics difficulty can be selected for all new sessions with `<server>/plugins/data/pex-skate/settings/difficulty.txt`. Set it to `easy`, `normal`, or `hardcore` (case-insensitive); if the file is absent, the engine's Easy mode is used. Toggle Skate mode off and on again to apply a changed setting.
 
 ## Controls
 

@@ -10,6 +10,8 @@ This bundle contains a server component, a client companion, checksums, and the 
 4. Download and extract the separate `PEX-Skate-ISO-Setup-Windows.zip` asset from the GitHub release. Run `Install-PEXSkateData.bat` and select your legally obtained Skate 3 Xbox 360 ISO. Select `<server>/plugins/data/pex-skate/` to install server data, or cancel that picker for client-only model setup. In the optional next picker, select the local Minecraft instance's `config/` folder to install the skater model at `config/pex-skate/private/skater.glb`; each client needs its own local model. The converter does not upload or bundle game data. The setup ZIP includes the converter's corresponding source and license notices.
 5. Restart the server and check its log for plugin load errors.
 
+Optional: set the Skate 3 physics mode for new sessions in `<server>/plugins/data/pex-skate/settings/difficulty.txt` to `easy`, `normal`, or `hardcore` (case-insensitive). The default is `easy`. Toggle Skate mode off and on to apply a changed setting.
+
 ## Client
 
 Install Fabric Loader, Fabric API, and `pex-skate-client-26.3.jar` on each Java Edition client. The client version must match the Minecraft version in the filename.
