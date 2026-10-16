@@ -110,13 +110,6 @@ impl CollisionScan {
     }
 }
 
-pub fn around_player(world: &World, position: (f64, f64, f64)) -> Result<LocalCollision, String> {
-    let mut scan = CollisionScan::new(position);
-    scan.advance(world, SAMPLE_BLOCKS)?;
-    scan.into_local()
-        .ok_or_else(|| "Minecraft collision scan did not finish".to_owned())
-}
-
 fn sample_position(origin: (i32, i32, i32), index: usize) -> (i32, i32, i32) {
     let x_offset = ((index / SAMPLE_WIDTH) % SAMPLE_WIDTH) as i32;
     let y_offset = (index / (SAMPLE_WIDTH * SAMPLE_WIDTH)) as i32;

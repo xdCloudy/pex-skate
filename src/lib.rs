@@ -41,11 +41,18 @@ struct ServerState {
     control_updated_at: HashMap<String, Instant>,
     sessions: HashMap<String, SkateSession>,
     pending_loads: HashSet<String>,
+    pending_initial_scans: HashMap<String, PendingSkateLoad>,
     engine_accumulator: HashMap<String, f32>,
     engine_updated_at: HashMap<String, Instant>,
     last_broadcast_at: HashMap<String, Instant>,
     collision_center: HashMap<String, (f32, f32, f32)>,
     collision_scans: HashMap<String, CollisionScan>,
+}
+
+struct PendingSkateLoad {
+    scan: CollisionScan,
+    spawn: [f32; 3],
+    heading: f32,
 }
 
 impl ServerState {
@@ -143,6 +150,7 @@ impl CommandHandler for ToggleSkate {
                 state.control_updated_at.remove(&name);
                 state.sessions.remove(&name);
                 state.pending_loads.remove(&name);
+                state.pending_initial_scans.remove(&name);
                 state.engine_accumulator.remove(&name);
                 state.engine_updated_at.remove(&name);
                 state.last_broadcast_at.remove(&name);
@@ -179,72 +187,32 @@ impl CommandHandler for ToggleSkate {
                 ));
                 return Ok(0);
             };
-            let Some(data_root) = DATA_ROOT.get() else {
+            if DATA_ROOT.get().is_none() {
                 clear_pending_load(&name);
                 sender.send_message(TextComponent::text(
                     "Skate Engine data folder is unavailable.",
                 ));
                 return Ok(0);
-            };
+            }
             let position = player.get_position();
-            let collision =
-                match collision::around_player(&player.as_entity().get_world(), position) {
-                    Ok(collision) if !collision.triangles.is_empty() => collision,
-                    Ok(_) => {
-                        clear_pending_load(&name);
-                        sender.send_message(TextComponent::text(
-                            "No Minecraft collision was found near you.",
-                        ));
-                        return Ok(0);
-                    }
-                    Err(error) => {
-                        clear_pending_load(&name);
-                        sender.send_message(TextComponent::text(&format!(
-                            "Could not read skate collision: {error}"
-                        )));
-                        return Ok(0);
-                    }
-                };
             let spawn = [position.0 as f32, position.1 as f32, position.2 as f32];
             let heading = player.get_yaw().to_radians();
-            let session = match SkateSession::load(
-                data_root,
-                collision.triangles,
-                collision.rails,
-                spawn,
-                heading,
-            ) {
-                Ok(session) => session,
-                Err(error) => {
-                    clear_pending_load(&name);
-                    sender.send_message(TextComponent::text(&format!(
-                        "Skate Engine could not load: {error}"
-                    )));
-                    return Ok(0);
-                }
-            };
-            let mut session = session;
-            let mut pose = session.pose();
-            pose.visual = session.skeletal_pose();
-            let now = Instant::now();
             let Ok(mut state) = server_state().lock() else {
                 sender.send_message(TextComponent::text("Skate mode state is unavailable."));
+                clear_pending_load(&name);
                 return Ok(0);
             };
-            state.pending_loads.remove(&name);
-            state.enabled.insert(name.clone());
-            state.controls.insert(name.clone(), Controls::default());
-            state.control_updated_at.insert(name.clone(), now);
-            state.sessions.insert(name.clone(), session);
-            state.engine_accumulator.insert(name.clone(), 0.0);
-            state.engine_updated_at.insert(name.clone(), now);
-            state.last_broadcast_at.insert(name.clone(), now);
-            state
-                .collision_center
-                .insert(name.clone(), (spawn[0], spawn[1], spawn[2]));
-            drop(state);
-            broadcast_pose(&server, player.as_entity().get_id(), &pose, true);
-            sender.send_message(TextComponent::text("Skate 3 Engine mode enabled."));
+            state.pending_initial_scans.insert(
+                name.clone(),
+                PendingSkateLoad {
+                    scan: CollisionScan::new(position),
+                    spawn,
+                    heading,
+                },
+            );
+            sender.send_message(TextComponent::text(
+                "Preparing Skate mode: sampling local Minecraft collision. This can take a moment.",
+            ));
         }
         Ok(0)
     }
@@ -253,6 +221,7 @@ impl CommandHandler for ToggleSkate {
 fn clear_pending_load(name: &str) {
     if let Ok(mut state) = server_state().lock() {
         state.pending_loads.remove(name);
+        state.pending_initial_scans.remove(name);
     }
 }
 
@@ -304,6 +273,7 @@ impl EventHandler<pumpkin_plugin_api::events::player::PlayerLeaveEvent> for Skat
             state.control_updated_at.remove(&name);
             state.sessions.remove(&name);
             state.pending_loads.remove(&name);
+            state.pending_initial_scans.remove(&name);
             state.engine_accumulator.remove(&name);
             state.engine_updated_at.remove(&name);
             state.last_broadcast_at.remove(&name);
@@ -348,6 +318,19 @@ impl EventHandler<ServerTickEndEvent> for SkateTick {
         server: Server,
         event: pumpkin_plugin_api::events::EventData<ServerTickEndEvent>,
     ) -> pumpkin_plugin_api::events::EventData<ServerTickEndEvent> {
+        let pending = server_state()
+            .lock()
+            .map(|state| {
+                state
+                    .pending_initial_scans
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for name in pending {
+            tick_pending_skate_load(&server, &name);
+        }
         let names = server_state()
             .lock()
             .map(|state| state.enabled.iter().cloned().collect::<Vec<_>>())
@@ -357,6 +340,124 @@ impl EventHandler<ServerTickEndEvent> for SkateTick {
         }
         event
     }
+}
+
+fn tick_pending_skate_load(server: &Server, name: &str) {
+    let Some(player) = server.get_player_by_name(name) else {
+        clear_pending_load(name);
+        return;
+    };
+    let mut pending = server_state()
+        .lock()
+        .ok()
+        .and_then(|mut state| state.pending_initial_scans.remove(name));
+    let Some(mut pending) = pending.take() else {
+        return;
+    };
+    let position = player.get_position();
+    if initial_scan_recenter_needed(
+        pending.scan.center(),
+        (position.0 as f32, position.1 as f32, position.2 as f32),
+    ) {
+        pending.scan = CollisionScan::new(position);
+        pending.spawn = [position.0 as f32, position.1 as f32, position.2 as f32];
+        pending.heading = player.get_yaw().to_radians();
+    }
+    let world = player.as_entity().get_world();
+    let complete = match pending.scan.advance(&world, COLLISION_BLOCKS_PER_TICK) {
+        Ok(complete) => complete,
+        Err(error) => {
+            clear_pending_load(name);
+            player.send_system_message(
+                TextComponent::text(&format!("Could not read skate collision: {error}")),
+                true,
+            );
+            return;
+        }
+    };
+    if !complete {
+        if let Ok(mut state) = server_state().lock() {
+            if state.pending_loads.contains(name) {
+                state.pending_initial_scans.insert(name.to_owned(), pending);
+            }
+        }
+        return;
+    }
+
+    let collision_center = pending.scan.center();
+    let Some(local) = pending
+        .scan
+        .into_local()
+        .filter(|local| !local.triangles.is_empty())
+    else {
+        clear_pending_load(name);
+        player.send_system_message(
+            TextComponent::text("No Minecraft collision was found near you."),
+            true,
+        );
+        return;
+    };
+    let Some(data_root) = DATA_ROOT.get() else {
+        clear_pending_load(name);
+        player.send_system_message(
+            TextComponent::text("Skate Engine data folder is unavailable."),
+            true,
+        );
+        return;
+    };
+    let spawn_position = player.get_position();
+    pending.spawn = [
+        spawn_position.0 as f32,
+        spawn_position.1 as f32,
+        spawn_position.2 as f32,
+    ];
+    pending.heading = player.get_yaw().to_radians();
+    let session = match SkateSession::load(
+        data_root,
+        local.triangles,
+        local.rails,
+        pending.spawn,
+        pending.heading,
+    ) {
+        Ok(session) => session,
+        Err(error) => {
+            clear_pending_load(name);
+            player.send_system_message(
+                TextComponent::text(&format!("Skate Engine could not load: {error}")),
+                true,
+            );
+            return;
+        }
+    };
+    let mut session = session;
+    let mut pose = session.pose();
+    pose.visual = session.skeletal_pose();
+    let now = Instant::now();
+    let Ok(mut state) = server_state().lock() else {
+        clear_pending_load(name);
+        player.send_system_message(
+            TextComponent::text("Skate mode state is unavailable."),
+            true,
+        );
+        return;
+    };
+    if !state.pending_loads.remove(name) {
+        return;
+    }
+    state.pending_initial_scans.remove(name);
+    state.enabled.insert(name.to_owned());
+    state.controls.insert(name.to_owned(), Controls::default());
+    state.control_updated_at.insert(name.to_owned(), now);
+    state.sessions.insert(name.to_owned(), session);
+    state.engine_accumulator.insert(name.to_owned(), 0.0);
+    state.engine_updated_at.insert(name.to_owned(), now);
+    state.last_broadcast_at.insert(name.to_owned(), now);
+    state
+        .collision_center
+        .insert(name.to_owned(), collision_center);
+    drop(state);
+    broadcast_pose(server, player.as_entity().get_id(), &pose, true);
+    player.send_system_message(TextComponent::text("Skate 3 Engine mode enabled."), true);
 }
 
 fn tick_skater(server: &Server, name: &str) {
@@ -568,6 +669,13 @@ fn collision_refresh_needed(center: (f32, f32, f32), root: [f32; 3]) -> bool {
         || dy.abs() >= COLLISION_REFRESH_VERTICAL_DISTANCE
 }
 
+fn initial_scan_recenter_needed(center: (f32, f32, f32), position: (f32, f32, f32)) -> bool {
+    let dx = position.0 - center.0;
+    let dy = position.1 - center.1;
+    let dz = position.2 - center.2;
+    dx * dx + dz * dz >= 16.0 || dy.abs() >= 1.5
+}
+
 fn broadcast_pose(server: &Server, entity_id: u32, pose: &SkatePose, active: bool) {
     let mut payload = Vec::with_capacity(1100);
     payload.push(5); // version
@@ -701,7 +809,7 @@ pumpkin_plugin_api::register_plugin!(PexSkate);
 mod integration_tests {
     use super::{
         COLLISION_REFRESH_VERTICAL_DISTANCE, INPUT_TIMEOUT, ServerState, append_visual,
-        collision_refresh_needed, engine, physics::Controls,
+        collision_refresh_needed, engine, initial_scan_recenter_needed, physics::Controls,
     };
     use std::time::{Duration, Instant};
 
@@ -760,6 +868,14 @@ mod integration_tests {
         let center = (0.0, 64.0, 0.0);
         assert!(!collision_refresh_needed(center, [7.99, 64.0, 0.0]));
         assert!(collision_refresh_needed(center, [8.0, 64.0, 0.0]));
+    }
+
+    #[test]
+    fn initial_collision_scan_recenters_if_player_moves_out_of_its_safe_window() {
+        let center = (0.0, 64.0, 0.0);
+        assert!(!initial_scan_recenter_needed(center, (3.99, 64.0, 0.0)));
+        assert!(initial_scan_recenter_needed(center, (4.0, 64.0, 0.0)));
+        assert!(initial_scan_recenter_needed(center, (0.0, 65.5, 0.0)));
     }
 
     #[test]
