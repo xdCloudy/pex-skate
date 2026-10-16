@@ -57,7 +57,7 @@ public final class PexSkateClient implements ClientModInitializer {
     private static final KeyMapping DPAD_LEFT = flickKey("key.pexskate.dpad_left", InputConstants.KEY_U);
     private static final KeyMapping DPAD_RIGHT = flickKey("key.pexskate.dpad_right", InputConstants.KEY_O);
     private static final KeyMapping DISMOUNT = flickKey("key.pexskate.dismount", InputConstants.KEY_F);
-    private static final KeyMapping SESSION_MODIFIER = flickKey("key.pexskate.session_modifier", InputConstants.KEY_LEFT_CONTROL);
+    private static final KeyMapping SESSION_MODIFIER = flickKey("key.pexskate.session_modifier", InputConstants.KEY_LCONTROL);
 
     private static volatile boolean skateModeActive;
     private boolean skating;
