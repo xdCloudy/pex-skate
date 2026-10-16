@@ -966,11 +966,14 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 if other_player.as_entity().get_world().get_id() != world_id {
                     continue;
                 }
-                nearby_players.push((other_name.clone(), other_pose));
-                if nearby_players.len() == 16 {
-                    break;
-                }
+                nearby_players.push((other_name.clone(), other_pose, dx * dx + dy * dy + dz * dz));
             }
+            nearby_players.sort_by(|left, right| {
+                left.2
+                    .total_cmp(&right.2)
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+            nearby_players.truncate(16);
             let Some(session) = state.sessions.get_mut(name) else {
                 return;
             };
@@ -979,7 +982,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
             let mut steps = 0;
             let collision_players: Vec<_> = nearby_players
                 .iter()
-                .map(|(_, player_pose)| player_pose.clone())
+                .map(|(_, player_pose, _)| player_pose.clone())
                 .collect();
             let mut failure = session.refresh_player_collision(&collision_players).err();
             while remaining >= period && steps < 6 {
@@ -1013,7 +1016,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 );
                 return;
             }
-            for (other_name, other_pose) in &nearby_players {
+            for (other_name, other_pose, _) in &nearby_players {
                 let Some(velocity) = player_collision_impact(&pose, other_pose) else {
                     continue;
                 };
