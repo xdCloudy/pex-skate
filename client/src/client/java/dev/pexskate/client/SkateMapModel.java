@@ -250,13 +250,15 @@ final class SkateMapModel {
         int vertexCount = (int) vertexCountLong;
         int indexCount = (int) indexCountLong;
         long geometryMemoryEstimate = file.length
-                + vertexCountLong * 92L
+                + vertexCountLong * 104L
                 + indexCountLong * 8L;
         long parserBudget = Runtime.getRuntime().maxMemory() / 2;
         if (geometryMemoryEstimate > parserBudget) {
             throw new IOException("SKATE district geometry exceeds this client's parse memory budget");
         }
         long[] materialTextures = new long[materialCount];
+        long[] materialLightmaps = new long[materialCount];
+        float[] materialLightmapStrengths = new float[materialCount];
         float[][] materialColors = new float[materialCount][4];
         for (int i = 0; i < materialCount; i++) {
             reader.string();
@@ -268,14 +270,17 @@ final class SkateMapModel {
             materialColors[i][3] = 1.0f;
             reader.skipFloats(2); // roughness and emissive
             materialTextures[i] = reader.u32(); // albedo texture, one-based
-            reader.skipU32(1); // indirect texture
+            materialLightmaps[i] = reader.u32(); // baked indirect-light texture, one-based
             reader.skipU32(3); // normal, ORM, emissive
-            reader.skipFloats(1); // indirect strength
+            materialLightmapStrengths[i] = Math.clamp(reader.f32(), 0.0f, 1.0f);
             reader.skipU32(1); // alpha mode
             reader.skipFloats(1); // alpha cutoff
             reader.skipU32(3); // audio, physics, pattern
             reader.skipU32(1); // depth layer
             if (reader.u32() != 0) skipRetailDefinition(reader, textureCount);
+        }
+        for (long lightmap : materialLightmaps) {
+            if (lightmap > textureCount) throw new IOException("SKATE material references an invalid lightmap");
         }
 
         List<TextureData> textures = new ArrayList<>(textureCount);
@@ -302,6 +307,7 @@ final class SkateMapModel {
         float[] positions = new float[vertexCount * 3];
         float[] normals = new float[vertexCount * 3];
         float[] uv = new float[vertexCount * 2];
+        float[] vertexIndirectLight = new float[vertexCount * 3];
         int[] vertexMaterials = new int[vertexCount];
         for (int i = 0; i < vertexCount; i++) {
             int p = i * 3;
@@ -321,10 +327,17 @@ final class SkateMapModel {
             if (!Float.isFinite(uv[uvAt]) || !Float.isFinite(uv[uvAt + 1])) {
                 throw new IOException("non-finite SKATE map texture coordinate");
             }
-            vertices.position(vertices.position() + 8); // lightmap UV
+            float lightU = vertices.getFloat();
+            float lightV = vertices.getFloat();
+            if (!Float.isFinite(lightU) || !Float.isFinite(lightV)) {
+                throw new IOException("non-finite SKATE lightmap coordinate");
+            }
             long material = Integer.toUnsignedLong(vertices.getInt()) - 1;
             if (material < 0 || material >= materialCount) throw new IOException("SKATE vertex references an invalid material");
             vertexMaterials[i] = (int) material;
+            sampleIndirectLight(textures, materialLightmaps[(int) material],
+                    materialLightmapStrengths[(int) material], lightU, lightV,
+                    vertexIndirectLight, p);
             vertices.position(vertices.position() + 12); // decal UV and tangent frame
         }
         ByteBuffer indexBuffer = ByteBuffer.wrap(indexBytes).order(ByteOrder.LITTLE_ENDIAN);
@@ -352,7 +365,8 @@ final class SkateMapModel {
             int texture = Math.toIntExact(materialTextures[material]);
             if (texture < 0 || texture > textures.size()) throw new IOException("SKATE material references an invalid texture");
             int[] materialIndices = entry.getValue().toArray();
-            primitives.add(new PendingPrimitive(positions, normals, uv, materialIndices, texture, materialColors[material]));
+            primitives.add(new PendingPrimitive(positions, normals, uv, vertexIndirectLight,
+                    materialIndices, texture, materialColors[material]));
         }
         return new ParsedModel(filename, mapName, List.copyOf(textures), List.copyOf(primitives));
     }
@@ -380,9 +394,26 @@ final class SkateMapModel {
         List<Primitive> primitives = new ArrayList<>(parsed.primitives.size());
         for (PendingPrimitive primitive : parsed.primitives) {
             primitives.add(new Primitive(primitive.positions, primitive.normals, primitive.uv,
-                    primitive.indices, textures[primitive.textureIndex], primitive.color));
+                    primitive.vertexIndirectLight, primitive.indices,
+                    textures[primitive.textureIndex], primitive.color));
         }
         return new Model(parsed.filename, List.copyOf(primitives));
+    }
+
+    private static void sampleIndirectLight(List<TextureData> textures, long textureId, float strength,
+                                            float u, float v, float[] output, int offset) {
+        if (textureId == 0 || strength <= 0.0f) {
+            output[offset] = output[offset + 1] = output[offset + 2] = 1.0f;
+            return;
+        }
+        TextureData texture = textures.get((int) textureId - 1);
+        int x = Math.min((int) (Math.clamp(u, 0.0f, 1.0f) * texture.width), texture.width - 1);
+        int y = Math.min((int) (Math.clamp(v, 0.0f, 1.0f) * texture.height), texture.height - 1);
+        int color = (y * texture.width + x) * 4;
+        for (int channel = 0; channel < 3; channel++) {
+            float baked = (texture.rgba[color + channel] & 255) / 255.0f;
+            output[offset + channel] = 1.0f + strength * (baked - 1.0f);
+        }
     }
 
     private static void skipRetailDefinition(Reader reader, int textureCount) throws IOException {
@@ -433,7 +464,8 @@ final class SkateMapModel {
     private record ParsedModel(String filename, String mapName, List<TextureData> textures,
                                List<PendingPrimitive> primitives) {}
     private record TextureData(String name, int width, int height, byte[] rgba) {}
-    private record PendingPrimitive(float[] positions, float[] normals, float[] uv, int[] indices,
+    private record PendingPrimitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight,
+                                    int[] indices,
                                     int textureIndex, float[] color) {}
     private record ChunkMaterial(int material, int x, int z) {}
 
@@ -450,16 +482,17 @@ final class SkateMapModel {
     }
 
     private static final class Primitive {
-        private final float[] positions, normals, uv, color;
+        private final float[] positions, normals, uv, vertexIndirectLight, color;
         private final int[] indices;
         private final Identifier texture;
         private final float[] bounds;
 
-        private Primitive(float[] positions, float[] normals, float[] uv, int[] indices,
+        private Primitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight, int[] indices,
                           Identifier texture, float[] color) {
             this.positions = positions;
             this.normals = normals;
             this.uv = uv;
+            this.vertexIndirectLight = vertexIndirectLight;
             this.indices = indices;
             this.texture = texture;
             this.color = color.clone();
@@ -500,7 +533,9 @@ final class SkateMapModel {
                 normal.set(normals[point], normals[point + 1], normals[point + 2]);
                 pose.normal().transform(normal).normalize();
                 output.addVertex(pose, positions[point], positions[point + 1], positions[point + 2])
-                        .setColor(color[0], color[1], color[2], color[3])
+                        .setColor(color[0] * vertexIndirectLight[point],
+                                color[1] * vertexIndirectLight[point + 1],
+                                color[2] * vertexIndirectLight[point + 2], color[3])
                         .setUv(uv[texCoord], uv[texCoord + 1])
                         .setLight(light)
                         .setNormal(normal.x, normal.y, normal.z);
