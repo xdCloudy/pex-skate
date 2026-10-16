@@ -17,8 +17,14 @@ public final class SkatePoseCache {
         }
         long now = System.nanoTime();
         Track track = TRACKS.get(packet.entityId());
-        Frame next = new Frame(now, packet.hipsX(), packet.hipsY(), packet.hipsZ(),
-                packet.boneMask(), packet.boneOffsets(), boardYaw(packet));
+        float[] camera = {
+                packet.cameraOffsetX(), packet.cameraOffsetY(), packet.cameraOffsetZ(),
+                packet.cameraForwardX(), packet.cameraForwardY(), packet.cameraForwardZ(),
+                packet.cameraUpX(), packet.cameraUpY(), packet.cameraUpZ(), packet.cameraFov()
+        };
+        Frame next = new Frame(now, packet.x(), packet.y(), packet.z(),
+                packet.hipsX(), packet.hipsY(), packet.hipsZ(),
+                packet.boneMask(), packet.boneOffsets(), boardYaw(packet), camera);
         if (track == null) TRACKS.put(packet.entityId(), new Track(next, next));
         else {
             track.previous = track.current;
@@ -60,8 +66,9 @@ public final class SkatePoseCache {
         }
     }
 
-    private record Frame(long time, float hipsX, float hipsY, float hipsZ,
-                         long mask, short[] offsets, float yaw) {}
+    private record Frame(long time, float rootX, float rootY, float rootZ,
+                         float hipsX, float hipsY, float hipsZ,
+                         long mask, short[] offsets, float yaw, float[] camera) {}
 
     public static final class Pose {
         private final Frame a;
@@ -88,6 +95,42 @@ public final class SkatePoseCache {
         public float yaw() {
             float delta = (b.yaw - a.yaw + (float) Math.PI * 3.0f) % ((float) Math.PI * 2.0f) - (float) Math.PI;
             return a.yaw + delta * t;
+        }
+
+        public boolean hasCamera() {
+            return Float.isFinite(b.camera[9]) && b.camera[9] >= 30.0f && b.camera[9] <= 120.0f
+                    && length(cameraForward()) > 0.5f && length(cameraUp()) > 0.5f;
+        }
+
+        public float[] cameraPosition() {
+            if (!hasCamera()) return null;
+            return new float[] {
+                    lerp(a.rootX + a.camera[0], b.rootX + b.camera[0], t),
+                    lerp(a.rootY + a.camera[1], b.rootY + b.camera[1], t),
+                    lerp(a.rootZ + a.camera[2], b.rootZ + b.camera[2], t)
+            };
+        }
+
+        public float[] cameraForward() { return vector(3); }
+        public float[] cameraUp() { return vector(6); }
+        public float cameraFov() { return lerp(a.camera[9], b.camera[9], t); }
+
+        private float[] vector(int offset) {
+            if (b.camera.length < offset + 3) return new float[3];
+            float[] value = new float[] {
+                    lerp(a.camera[offset], b.camera[offset], t),
+                    lerp(a.camera[offset + 1], b.camera[offset + 1], t),
+                    lerp(a.camera[offset + 2], b.camera[offset + 2], t)
+            };
+            float length = length(value);
+            if (length > 1.0e-5f) {
+                value[0] /= length; value[1] /= length; value[2] /= length;
+            }
+            return value;
+        }
+
+        private static float length(float[] value) {
+            return (float) Math.sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
         }
 
         private static float[] point(Frame frame, int index) {

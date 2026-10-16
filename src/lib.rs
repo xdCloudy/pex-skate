@@ -212,7 +212,7 @@ impl CommandHandler for ToggleSkate {
             };
             let mut session = session;
             let mut pose = session.pose();
-            pose.bones = session.skeletal_pose();
+            pose.visual = session.skeletal_pose();
             let now = Instant::now();
             let Ok(mut state) = server_state().lock() else {
                 sender.send_message(TextComponent::text("Skate mode state is unavailable."));
@@ -405,7 +405,7 @@ impl EventHandler<PlayerMoveEvent> for SkateMovement {
         if should_broadcast {
             state.last_broadcast_at.insert(name.clone(), now);
             if let Some(session) = state.sessions.get_mut(&name) {
-                pose.bones = session.skeletal_pose();
+                pose.visual = session.skeletal_pose();
             }
         }
         let entity_id = event.player.as_entity().get_id();
@@ -474,7 +474,7 @@ impl EventHandler<PlayerMoveEvent> for SkateMovement {
 
 fn broadcast_pose(server: &Server, entity_id: u32, pose: &SkatePose, active: bool) {
     let mut payload = Vec::with_capacity(400);
-    payload.push(3); // version
+    payload.push(4); // version
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in pose.root {
@@ -503,16 +503,16 @@ fn broadcast_pose(server: &Server, entity_id: u32, pose: &SkatePose, active: boo
     let trick_name = trick_name.as_bytes();
     payload.extend_from_slice(&(trick_name.len() as u16).to_be_bytes());
     payload.extend_from_slice(trick_name);
-    append_skeleton(&mut payload, pose.bones.as_ref(), pose.root);
+    append_visual(&mut payload, pose.visual.as_ref(), pose.root);
     broadcast_payload(server, &payload);
 }
 
-fn append_skeleton(
+fn append_visual(
     payload: &mut Vec<u8>,
-    bones: Option<&engine::SkateBones>,
+    visual: Option<&engine::SkateVisualPose>,
     fallback_hips: [f32; 3],
 ) {
-    if let Some(bones) = bones {
+    if let Some(bones) = visual.map(|visual| &visual.bones) {
         for value in bones.hips {
             payload.extend_from_slice(&value.to_be_bytes());
         }
@@ -527,6 +527,19 @@ fn append_skeleton(
         payload.extend_from_slice(&0_u64.to_be_bytes());
         payload.resize(payload.len() + 36 * 3 * 2, 0);
     }
+    if let Some(camera) = visual.and_then(|visual| visual.camera.as_ref()) {
+        for value in camera
+            .offset
+            .into_iter()
+            .chain(camera.forward)
+            .chain(camera.up)
+            .chain([camera.fov])
+        {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+    } else {
+        payload.resize(payload.len() + 10 * 4, 0);
+    }
 }
 
 fn broadcast_state(
@@ -538,7 +551,7 @@ fn broadcast_state(
     active: bool,
 ) {
     let mut payload = Vec::with_capacity(84);
-    payload.push(3);
+    payload.push(4);
     payload.push(u8::from(active));
     payload.extend_from_slice(&entity_id.to_be_bytes());
     for value in [position.0 as f32, position.1 as f32, position.2 as f32] {
@@ -566,6 +579,7 @@ fn broadcast_state(
     }
     payload.extend_from_slice(&0_u64.to_be_bytes());
     payload.resize(payload.len() + 36 * 3 * 2, 0);
+    payload.resize(payload.len() + 10 * 4, 0);
 
     broadcast_payload(server, &payload);
 }
@@ -582,7 +596,7 @@ pumpkin_plugin_api::register_plugin!(PexSkate);
 
 #[cfg(test)]
 mod integration_tests {
-    use super::{INPUT_TIMEOUT, ServerState, physics::Controls};
+    use super::{INPUT_TIMEOUT, ServerState, append_visual, engine, physics::Controls};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -616,5 +630,30 @@ mod integration_tests {
         state.controls.insert("rider".into(), controls);
         state.control_updated_at.insert("rider".into(), now);
         assert_eq!(state.controls_for("rider", now), controls);
+    }
+
+    #[test]
+    fn v4_visual_tail_has_fixed_skeleton_and_camera_layout() {
+        let visual = engine::SkateVisualPose {
+            bones: engine::SkateBones {
+                hips: [4.0, 5.0, 6.0],
+                present: 1 << 1,
+                offsets: [[0; 3]; 36],
+            },
+            camera: Some(engine::SkateCamera {
+                offset: [1.25, 2.5, -3.75],
+                forward: [0.0, 0.0, 1.0],
+                up: [0.0, 1.0, 0.0],
+                fov: 73.0,
+            }),
+        };
+        let mut payload = Vec::new();
+        append_visual(&mut payload, Some(&visual), [0.0; 3]);
+
+        assert_eq!(payload.len(), 12 + 8 + 36 * 3 * 2 + 10 * 4);
+        assert_eq!(&payload[0..4], &4.0_f32.to_be_bytes());
+        assert_eq!(&payload[12..20], &(1_u64 << 1).to_be_bytes());
+        assert_eq!(&payload[236..240], &1.25_f32.to_be_bytes());
+        assert_eq!(&payload[272..276], &73.0_f32.to_be_bytes());
     }
 }

@@ -18,7 +18,11 @@ public record SkateStatePayload(
         String trickName,
         float hipsX, float hipsY, float hipsZ,
         long boneMask,
-        short[] boneOffsets
+        short[] boneOffsets,
+        float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
+        float cameraForwardX, float cameraForwardY, float cameraForwardZ,
+        float cameraUpX, float cameraUpY, float cameraUpZ,
+        float cameraFov
 ) implements CustomPacketPayload {
     public static final Type<SkateStatePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath("pexskate", "state"));
     public static final StreamCodec<RegistryFriendlyByteBuf, SkateStatePayload> CODEC = StreamCodec.of(
@@ -44,6 +48,11 @@ public record SkateStatePayload(
                 buffer.writeFloat(payload.hipsZ());
                 buffer.writeLong(payload.boneMask());
                 for (short offset : payload.boneOffsets()) buffer.writeShort(offset);
+                for (float value : new float[] {
+                        payload.cameraOffsetX(), payload.cameraOffsetY(), payload.cameraOffsetZ(),
+                        payload.cameraForwardX(), payload.cameraForwardY(), payload.cameraForwardZ(),
+                        payload.cameraUpX(), payload.cameraUpY(), payload.cameraUpZ(), payload.cameraFov()
+                }) buffer.writeFloat(value);
             },
             buffer -> {
                 byte version = buffer.readByte();
@@ -62,13 +71,17 @@ public record SkateStatePayload(
                 long boneMask = buffer.readLong();
                 short[] offsets = new short[36 * 3];
                 for (int i = 0; i < offsets.length; i++) offsets[i] = buffer.readShort();
+                float[] camera = new float[10];
+                for (int i = 0; i < camera.length; i++) camera[i] = buffer.readFloat();
                 return new SkateStatePayload(version, active, entityId,
                         values[0], values[1], values[2], values[3], values[4], values[5],
                         values[6], values[7], values[8], values[9],
                         values[10], values[11], values[12], values[13], values[14],
                         values[15], values[16], values[17],
                         flags, new String(trick, java.nio.charset.StandardCharsets.UTF_8),
-                        hipsX, hipsY, hipsZ, boneMask, offsets);
+                        hipsX, hipsY, hipsZ, boneMask, offsets,
+                        camera[0], camera[1], camera[2], camera[3], camera[4], camera[5],
+                        camera[6], camera[7], camera[8], camera[9]);
             }
     );
 

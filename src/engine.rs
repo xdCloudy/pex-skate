@@ -60,6 +60,22 @@ pub struct SkateBones {
 }
 
 #[derive(Clone, Debug)]
+pub struct SkateCamera {
+    /// Camera origin relative to the simulation root, in Minecraft world axes.
+    pub offset: [f32; 3],
+    /// Skate camera basis `at` (+Z) and `up` (+Y) vectors.
+    pub forward: [f32; 3],
+    pub up: [f32; 3],
+    pub fov: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct SkateVisualPose {
+    pub bones: SkateBones,
+    pub camera: Option<SkateCamera>,
+}
+
+#[derive(Clone, Debug)]
 pub struct SkatePose {
     pub root: [f32; 3],
     pub velocity: [f32; 3],
@@ -72,7 +88,7 @@ pub struct SkatePose {
     pub line_time: f32,
     pub clean: bool,
     pub sketchy: bool,
-    pub bones: Option<SkateBones>,
+    pub visual: Option<SkateVisualPose>,
 }
 
 impl SkateSession {
@@ -117,7 +133,7 @@ impl SkateSession {
 
     /// Read the full render pose at network cadence, not at physics cadence.
     /// The joint list matches SkateGM's human-rig retarget protocol.
-    pub fn skeletal_pose(&mut self) -> Option<SkateBones> {
+    pub fn skeletal_pose(&mut self) -> Option<SkateVisualPose> {
         let pose = self.session.pose();
         let hips_index = self.bone_names.iter().position(|name| name == "HIPS")?;
         let hips_matrix = pose.bones.get(hips_index)?.to_cols_array();
@@ -170,10 +186,34 @@ impl SkateSession {
                     .clamp(i16::MIN as f32, i16::MAX as f32) as i16
             });
         }
-        Some(SkateBones {
-            hips,
-            present,
-            offsets,
+        let camera = pose.camera.as_ref().and_then(|(position, basis, fov)| {
+            let camera = SkateCamera {
+                offset: [
+                    position[0] - root[0],
+                    position[1] - root[1],
+                    position[2] - root[2],
+                ],
+                forward: basis.z_axis.to_array(),
+                up: basis.y_axis.to_array(),
+                fov: *fov,
+            };
+            (camera
+                .offset
+                .iter()
+                .chain(camera.forward.iter())
+                .chain(camera.up.iter())
+                .all(|value| value.is_finite())
+                && camera.fov.is_finite()
+                && camera.fov > 0.0)
+                .then_some(camera)
+        });
+        Some(SkateVisualPose {
+            bones: SkateBones {
+                hips,
+                present,
+                offsets,
+            },
+            camera,
         })
     }
 
@@ -192,7 +232,7 @@ impl SkateSession {
             line_time: score.line_time,
             clean: score.clean,
             sketchy: score.sketchy,
-            bones: None,
+            visual: None,
         }
     }
 }

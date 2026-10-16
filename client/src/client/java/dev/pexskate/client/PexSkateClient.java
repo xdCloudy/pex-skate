@@ -52,7 +52,7 @@ public final class PexSkateClient implements ClientModInitializer {
         PayloadTypeRegistry.serverboundPlay().register(ControlPayload.TYPE, ControlPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(SkateStatePayload.TYPE, SkateStatePayload.CODEC);
         ClientPlayNetworking.registerGlobalReceiver(SkateStatePayload.TYPE, (payload, context) -> {
-            if (payload.version() == 3) {
+            if (payload.version() == 4) {
                 context.client().execute(() -> {
                     SkatePoseCache.accept(payload);
                     updateBoard(context.client(), payload);
