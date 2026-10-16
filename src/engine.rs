@@ -115,7 +115,7 @@ impl SkateSession {
     /// One deterministic 60 Hz engine step. The caller owns the server tick
     /// accumulator and must not call this directly from client packet cadence.
     pub fn tick(&mut self, controls: Controls) -> Result<SkatePose, String> {
-        if controls.respawn && !self.previous_respawn {
+        if respawn_pressed(controls.respawn, self.previous_respawn) {
             if let Err(error) = self.session.return_to_checkpoint() {
                 eprintln!("PEX Skate checkpoint respawn unavailable: {error}");
             }
@@ -251,6 +251,10 @@ impl SkateSession {
     }
 }
 
+fn respawn_pressed(current: bool, previous: bool) -> bool {
+    current && !previous
+}
+
 fn quantize_rotation(mut rotation: [f32; 4]) -> [i16; 4] {
     let magnitude = rotation
         .iter()
@@ -310,7 +314,7 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
 
 #[cfg(test)]
 mod tests {
-    use super::{quantize_rotation, to_engine_controls};
+    use super::{quantize_rotation, respawn_pressed, to_engine_controls};
     use crate::physics::Controls;
 
     #[test]
@@ -361,6 +365,19 @@ mod tests {
             ..Controls::default()
         });
         assert_eq!(input.buttons & (1 << 8), 1 << 8);
+    }
+
+    #[test]
+    fn checkpoint_respawn_fires_once_per_press_and_again_after_release() {
+        let mut previous = false;
+        let mut presses = 0;
+        for current in [false, true, true, true, false, false, true, false] {
+            if respawn_pressed(current, previous) {
+                presses += 1;
+            }
+            previous = current;
+        }
+        assert_eq!(presses, 2);
     }
 
     #[test]
