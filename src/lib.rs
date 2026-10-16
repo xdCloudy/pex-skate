@@ -85,16 +85,32 @@ struct PendingSkateLoad {
 }
 
 impl ServerState {
-    fn controls_for(&self, name: &str, now: Instant) -> Controls {
-        let fresh = self
-            .control_updated_at
+    fn controls_are_fresh(&self, name: &str, now: Instant) -> bool {
+        self.control_updated_at
             .get(name)
-            .is_some_and(|updated| now.saturating_duration_since(*updated) <= INPUT_TIMEOUT);
-        if fresh {
+            .is_some_and(|updated| now.saturating_duration_since(*updated) <= INPUT_TIMEOUT)
+    }
+
+    fn controls_for(&self, name: &str, now: Instant) -> Controls {
+        if self.controls_are_fresh(name, now) {
             self.controls.get(name).copied().unwrap_or_default()
         } else {
             Controls::default()
         }
+    }
+
+    fn acknowledge_control_step(&mut self, name: &str, steps: usize, now: Instant) -> u32 {
+        if steps > 0
+            && self.controls_are_fresh(name, now)
+            && let Some(sequence) = self.control_sequences.get(name).copied()
+        {
+            self.acknowledged_control_sequences
+                .insert(name.to_owned(), sequence);
+        }
+        self.acknowledged_control_sequences
+            .get(name)
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -1090,13 +1106,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 );
                 return;
             }
-            if steps > 0
-                && let Some(sequence) = state.control_sequences.get(name).copied()
-            {
-                state
-                    .acknowledged_control_sequences
-                    .insert(name.to_owned(), sequence);
-            }
+            let acknowledged_sequence = state.acknowledge_control_step(name, steps, now);
             for (other_name, other_pose, _) in &nearby_players {
                 let Some(velocity) = player_collision_impact(&pose, other_pose) else {
                     continue;
@@ -1143,11 +1153,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 map_backed,
                 map_filename,
                 map_digests,
-                state
-                    .acknowledged_control_sequences
-                    .get(name)
-                    .copied()
-                    .unwrap_or(0),
+                acknowledged_sequence,
             )
         };
 
@@ -1702,6 +1708,24 @@ mod integration_tests {
         assert!(!sequence_is_newer(9, 10));
         assert!(sequence_is_newer(0, u32::MAX));
         assert!(!sequence_is_newer(u32::MAX, 0));
+    }
+
+    #[test]
+    fn only_fresh_controls_consumed_by_a_step_are_acknowledged() {
+        let now = Instant::now();
+        let mut state = ServerState::default();
+        state.control_sequences.insert("rider".into(), 7);
+        state.control_updated_at.insert("rider".into(), now);
+        assert_eq!(state.acknowledge_control_step("rider", 0, now), 0);
+        assert_eq!(state.acknowledge_control_step("rider", 1, now), 7);
+
+        state.control_sequences.insert("rider".into(), 8);
+        state.control_updated_at.insert(
+            "rider".into(),
+            now - INPUT_TIMEOUT - Duration::from_millis(1),
+        );
+        assert_eq!(state.acknowledge_control_step("rider", 1, now), 7);
+        assert_eq!(state.acknowledged_control_sequences.get("rider"), Some(&7));
     }
 
     #[test]
