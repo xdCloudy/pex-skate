@@ -7,14 +7,14 @@ pub struct Controls {
     pub steer: f32,
     pub right_x: f32,
     pub right_y: f32,
+    pub triggers: [u8; 2],
     pub push: bool,
     pub push_left: bool,
     pub brake: bool,
 }
 
 impl Controls {
-    /// Decode the original v1 action packet and v2 controller packet. V2 has
-    /// right/left-foot push and brake buttons plus four signed stick axes.
+    /// Decode v1 legacy, v2 stick, and v3 trigger-aware controller packets.
     pub fn decode(packet: &[u8]) -> Option<Self> {
         match packet {
             [1, flags, forward, steer] if flags & !0x1f == 0 => Some(Self {
@@ -28,6 +28,7 @@ impl Controls {
                 } else {
                     0.0
                 },
+                triggers: [0; 2],
                 push: flags & 1 != 0,
                 push_left: false,
                 brake: flags & 2 != 0,
@@ -37,6 +38,26 @@ impl Controls {
                 steer: f32::from(*steer as i8) / 127.0,
                 right_x: f32::from(*right_x as i8) / 127.0,
                 right_y: f32::from(*right_y as i8) / 127.0,
+                triggers: [0; 2],
+                push: flags & 1 != 0,
+                push_left: flags & 2 != 0,
+                brake: flags & 4 != 0,
+            }),
+            [
+                3,
+                flags,
+                left_trigger,
+                right_trigger,
+                forward,
+                steer,
+                right_x,
+                right_y,
+            ] if flags & !0x07 == 0 => Some(Self {
+                forward: f32::from(*forward as i8) / 127.0,
+                steer: f32::from(*steer as i8) / 127.0,
+                right_x: f32::from(*right_x as i8) / 127.0,
+                right_y: f32::from(*right_y as i8) / 127.0,
+                triggers: [*left_trigger, *right_trigger],
                 push: flags & 1 != 0,
                 push_left: flags & 2 != 0,
                 brake: flags & 4 != 0,
@@ -56,6 +77,7 @@ mod tests {
         assert!(Controls::decode(b"\x01\x80\x00\x00").is_none());
         assert!(Controls::decode(b"\x02\x00\x00\x00").is_none());
         assert!(Controls::decode(b"\x02\x80\x00\x00\x00\x00").is_none());
+        assert!(Controls::decode(b"\x03\x80\x00\x00\x00\x00\x00\x00").is_none());
     }
 
     #[test]
@@ -75,5 +97,15 @@ mod tests {
         assert_eq!(controls.right_x, -1.0);
         assert_eq!(controls.right_y, 1.0);
         assert!(controls.push && controls.push_left && controls.brake);
+        assert_eq!(controls.triggers, [0; 2]);
+    }
+
+    #[test]
+    fn decodes_v3_grab_triggers_and_flick_it_axes() {
+        let controls = Controls::decode(&[3, 1, 192, 255, 0, 0, 64, -127_i8 as u8]).unwrap();
+        assert!(controls.push);
+        assert_eq!(controls.triggers, [192, 255]);
+        assert_eq!(controls.right_x, 64.0 / 127.0);
+        assert_eq!(controls.right_y, -1.0);
     }
 }

@@ -187,7 +187,9 @@ public final class PexSkateClient implements ClientModInitializer {
         float rightY = clamp(keyAxis(FLICK_UP.isDown(), FLICK_DOWN.isDown()) + pad.rightY());
 
         ClientPlayNetworking.send(new ControlPayload(
-                (byte) 2, (byte) flags, quantize(pad.forward()), quantize(steer), quantize(rightX), quantize(rightY)));
+                (byte) 3, (byte) flags,
+                quantizeTrigger(pad.leftTrigger()), quantizeTrigger(pad.rightTrigger()),
+                quantize(pad.forward()), quantize(steer), quantize(rightX), quantize(rightY)));
     }
 
     private Gamepad readGamepad() {
@@ -218,6 +220,8 @@ public final class PexSkateClient implements ClientModInitializer {
                 -deadzone(axis(SDLGamepad.SDL_GetGamepadAxis(gamepadHandle, SDLGamepad.SDL_GAMEPAD_AXIS_LEFTY))),
                 deadzone(axis(SDLGamepad.SDL_GetGamepadAxis(gamepadHandle, SDLGamepad.SDL_GAMEPAD_AXIS_RIGHTX))),
                 -deadzone(axis(SDLGamepad.SDL_GetGamepadAxis(gamepadHandle, SDLGamepad.SDL_GAMEPAD_AXIS_RIGHTY))),
+                trigger(SDLGamepad.SDL_GetGamepadAxis(gamepadHandle, SDLGamepad.SDL_GAMEPAD_AXIS_LEFT_TRIGGER)),
+                trigger(SDLGamepad.SDL_GetGamepadAxis(gamepadHandle, SDLGamepad.SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)),
                 SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_SOUTH),
                 SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_WEST),
                 SDLGamepad.SDL_GetGamepadButton(gamepadHandle, SDLGamepad.SDL_GAMEPAD_BUTTON_EAST));
@@ -225,6 +229,10 @@ public final class PexSkateClient implements ClientModInitializer {
 
     private static float axis(short value) {
         return Math.max(-1.0f, value / 32767.0f);
+    }
+
+    private static float trigger(short value) {
+        return Math.clamp(value / 32767.0f, 0.0f, 1.0f);
     }
 
     private static float keyAxis(boolean positive, boolean negative) {
@@ -245,9 +253,15 @@ public final class PexSkateClient implements ClientModInitializer {
         return (byte) Math.round(clamp(value) * 127.0f);
     }
 
+    private static byte quantizeTrigger(float value) {
+        return (byte) Math.round(Math.clamp(value, 0.0f, 1.0f) * 255.0f);
+    }
+
     private record Gamepad(float leftX, float forward, float rightX, float rightY,
+                           float leftTrigger, float rightTrigger,
                            boolean pushRight, boolean pushLeft, boolean brake) {
-        private static final Gamepad NONE = new Gamepad(0.0f, 0.0f, 0.0f, 0.0f, false, false, false);
+        private static final Gamepad NONE = new Gamepad(
+                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false, false, false);
     }
 
     private static void clearStaleBoards(Minecraft client) {

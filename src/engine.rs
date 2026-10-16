@@ -264,7 +264,7 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
         buttons: (if controls.push { A } else { 0 })
             | (if controls.brake { B } else { 0 })
             | (if controls.push_left { X } else { 0 }),
-        triggers: [0, 0],
+        triggers: controls.triggers,
         left: [axis(controls.steer), axis(controls.forward)],
         right: [axis(controls.right_x), axis(controls.right_y)],
     }
@@ -282,12 +282,13 @@ mod tests {
             steer: -0.5,
             right_x: -1.0,
             right_y: 1.0,
+            triggers: [96, 255],
             push: true,
             push_left: true,
             brake: true,
         });
         assert_eq!(input.buttons, (1 << 12) | (1 << 13) | (1 << 14));
-        assert_eq!(input.triggers, [0; 2]);
+        assert_eq!(input.triggers, [96, 255]);
         assert_eq!(input.left[0], -16_384);
         assert_eq!(input.left[1], i16::MAX);
         assert_eq!(input.right, [-i16::MAX, i16::MAX]);

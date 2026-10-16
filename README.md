@@ -81,7 +81,7 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | Steer | A / D | Left stick X | Supported |
 | Pump/forward axis | — | Left stick Y | Supported |
 | Flick-It tricks | Arrow keys | Right stick | Supported |
-| Grab | Q / E | — | Not implemented in PEX Skate |
+| Grab | Q / E | Left / right trigger | Controller triggers supported; keyboard grab bindings pending |
 | Get on/off board | F | — | Not implemented in PEX Skate |
 | Interact | C | — | Not implemented in PEX Skate |
 | D-pad | I / K / U / O | D-pad | Not implemented in PEX Skate |
@@ -94,11 +94,11 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | Skate 3 music | Z + Ctrl/arrows | LB + right stick | Not implemented in PEX Skate |
 | Settings / map / park editor / replays | — | LB + A / Y / B / RB | Not implemented in PEX Skate |
 
-The Minecraft port currently wires only toggle, pushes, brake, steering/pumping, and Flick-It trick axes into the simulation. The additional rows document SkateGM's keyboard/controller layout; their menus, grabs, dismount, interaction, respawn, items, maps, and minigames are not part of this PEX mod yet. The controller mapping uses the first connected device that SDL3 recognizes as a standard gamepad.
+The Minecraft port wires toggle, pushes, brake, steering/pumping, Flick-It trick axes, and controller grab triggers into the simulation. Keyboard grab keys and the additional menus, dismount, interaction, respawn, items, maps, and minigames are not part of this PEX mod yet. The controller mapping uses the first connected device that SDL3 recognizes as a standard gamepad.
 
 ## Protocol
 
-The client sends a `pexskate:control` custom payload once per client tick while Skate mode is active. Its v2 body is six bytes: protocol version, action flags, and four signed stick axes. The flags represent right-foot push, left-foot push, and brake; left-stick X steers and right-stick X/Y drive Skate 3's Flick-It/trick recognition. The server still accepts the original v1 input packet for compatibility. Server state v4 includes the engine root, board position/quaternion, velocity, score values, clean/sketchy flags, UTF-8 trick display name, hips position, a 36-joint presence mask and quantized offsets, plus the camera offset, forward/up vectors and field of view. The client interpolates the skeletal and camera snapshots.
+The client sends a `pexskate:control` custom payload once per client tick while Skate mode is active. The v3 body carries action flags, left/right trigger pressure, and four signed stick axes; triggers feed the engine's grab inputs, left-stick X steers, and right-stick X/Y drive Skate 3's Flick-It/trick recognition. The server accepts the original v1 and v2 packets for compatibility. Server state v4 includes the engine root, board position/quaternion, velocity, score values, clean/sketchy flags, UTF-8 trick display name, hips position, a 36-joint presence mask and quantized offsets, plus the camera offset, forward/up vectors and field of view. The client interpolates the skeletal and camera snapshots.
 
 The server clears controls after 250 ms without a fresh client packet, removes player state on disconnect, and sends engine state to clients at no more than 20 updates per second per skater. The local Minecraft skin rig uses a simplified six-part retarget of the engine skeleton; the original Skate 3 mesh and detailed facial/hand/foot animation are not loaded.
 
