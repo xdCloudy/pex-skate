@@ -65,6 +65,11 @@ $clientMapsManifestPath = if ($clientConfigPath) {
 } else {
     $null
 }
+$clientPropsPath = if ($clientConfigPath) {
+    Join-Path $clientConfigPath "pex-skate\props"
+} else {
+    $null
+}
 
 if ($dataPath -and ((Test-Path -LiteralPath $privatePath) -or (Test-Path -LiteralPath $mapsPath))) {
     $answer = [System.Windows.Forms.MessageBox]::Show(
@@ -124,10 +129,27 @@ try {
         if ($actualHash -ne $entry.sha256) {
             throw "Converted map hash does not match maps.json: $($entry.path)"
         }
+        if ($entry.props) {
+            if ($entry.props.path -notmatch '^props/[A-Za-z0-9._-]+\.skate$' -or
+                $entry.props.path -ne ("props/" + [System.IO.Path]::GetFileName($entry.path)) -or
+                $entry.props.sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+                throw "Conversion produced invalid authored prop metadata for $($entry.path)."
+            }
+            $propsFileName = [System.IO.Path]::GetFileName($entry.props.path)
+            $sourceProps = Join-Path (Join-Path $stagePath "assets\private\native-props") $propsFileName
+            if (-not (Test-Path -LiteralPath $sourceProps -PathType Leaf)) {
+                throw "Conversion did not produce $($entry.props.path). Nothing was installed."
+            }
+            $propsHash = (Get-FileHash -LiteralPath $sourceProps -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($propsHash -ne $entry.props.sha256.ToLowerInvariant()) {
+                throw "Converted prop hash does not match maps.json: $($entry.props.path)"
+            }
+        }
     }
 
     $serverDataMessage = "Server data not installed (client-only setup)."
     $modelSourcePath = Join-Path $stagePath "assets\private\skater.glb"
+    $propsSourcePath = Join-Path $stagePath "assets\private\native-props"
     if ($dataPath) {
         $hadPrivate = Test-Path -LiteralPath $privatePath
         $hadMaps = Test-Path -LiteralPath $mapsPath
@@ -167,6 +189,7 @@ try {
         }
         $serverDataMessage = "Server data and $( $mapEntries.Count ) converted map(s) installed: $dataPath"
         $modelSourcePath = Join-Path $privatePath "skater.glb"
+        $propsSourcePath = Join-Path $privatePath "native-props"
     }
 
     $clientModelMessage = "Client model not installed. To use the Skate 3 character mesh, run this setup on each client and choose its Minecraft config folder."
@@ -206,7 +229,7 @@ try {
         $replaceClientMaps = $true
         if (Test-Path -LiteralPath $clientMapsPath -PathType Container) {
             $answer = [System.Windows.Forms.MessageBox]::Show(
-                "Replace the existing local PEX Skate map packages?",
+                "Replace the existing local PEX Skate map and authored prop packages?",
                 "Replace client maps?",
                 [System.Windows.Forms.MessageBoxButtons]::YesNo,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -217,25 +240,59 @@ try {
             $clientMapParent = Split-Path -Parent $clientMapsPath
             $temporaryMapsPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".tmp")
             $oldMapsPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".previous")
+            $temporaryPropsPath = Join-Path $clientMapParent (".props-" + [guid]::NewGuid().ToString("N") + ".tmp")
+            $oldPropsPath = Join-Path $clientMapParent (".props-" + [guid]::NewGuid().ToString("N") + ".previous")
             $temporaryManifestPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".json.tmp")
             $oldManifestPath = Join-Path $clientMapParent (".maps-" + [guid]::NewGuid().ToString("N") + ".json.previous")
+            $installedClientMaps = $false
+            $installedClientProps = $false
+            $installedClientManifest = $false
             try {
                 New-Item -ItemType Directory -Force -Path $clientMapParent | Out-Null
                 $mapsSource = if ($dataPath) { $mapsPath } else { Join-Path $stagePath "maps" }
                 Copy-Item -LiteralPath $mapsSource -Destination $temporaryMapsPath -Recurse
                 $manifestSource = Join-Path (Split-Path -Parent $mapsSource) "maps.json"
                 Copy-Item -LiteralPath $manifestSource -Destination $temporaryManifestPath
+                New-Item -ItemType Directory -Force -Path $temporaryPropsPath | Out-Null
+                foreach ($entry in $mapEntries) {
+                    if (-not $entry.props) { continue }
+                    if ($entry.props.path -notmatch '^props/[A-Za-z0-9._-]+\.skate$' -or
+                        $entry.props.path -ne ("props/" + [System.IO.Path]::GetFileName($entry.path)) -or
+                        $entry.props.sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+                        throw "Conversion produced invalid authored prop metadata for $($entry.path)."
+                    }
+                    $propsFileName = [System.IO.Path]::GetFileName($entry.props.path)
+                    $propsSource = Join-Path $propsSourcePath $propsFileName
+                    if (-not (Test-Path -LiteralPath $propsSource -PathType Leaf)) {
+                        throw "Conversion did not produce $($entry.props.path). Nothing was installed to this client."
+                    }
+                    $propsHash = (Get-FileHash -LiteralPath $propsSource -Algorithm SHA256).Hash.ToLowerInvariant()
+                    if ($propsHash -ne $entry.props.sha256.ToLowerInvariant()) {
+                        throw "Converted prop hash does not match maps.json: $($entry.props.path)"
+                    }
+                    Copy-Item -LiteralPath $propsSource -Destination (Join-Path $temporaryPropsPath $propsFileName)
+                }
                 if (Test-Path -LiteralPath $clientMapsPath) {
                     Move-Item -LiteralPath $clientMapsPath -Destination $oldMapsPath
+                }
+                if (Test-Path -LiteralPath $clientPropsPath) {
+                    Move-Item -LiteralPath $clientPropsPath -Destination $oldPropsPath
                 }
                 if (Test-Path -LiteralPath $clientMapsManifestPath) {
                     Move-Item -LiteralPath $clientMapsManifestPath -Destination $oldManifestPath
                 }
                 Move-Item -LiteralPath $temporaryMapsPath -Destination $clientMapsPath
+                $installedClientMaps = $true
+                Move-Item -LiteralPath $temporaryPropsPath -Destination $clientPropsPath
+                $installedClientProps = $true
                 Move-Item -LiteralPath $temporaryManifestPath -Destination $clientMapsManifestPath
+                $installedClientManifest = $true
                 try {
                     if (Test-Path -LiteralPath $oldMapsPath) {
                         Remove-Item -LiteralPath $oldMapsPath -Recurse -Force
+                    }
+                    if (Test-Path -LiteralPath $oldPropsPath) {
+                        Remove-Item -LiteralPath $oldPropsPath -Recurse -Force
                     }
                     if (Test-Path -LiteralPath $oldManifestPath) {
                         Remove-Item -LiteralPath $oldManifestPath -Force
@@ -243,16 +300,21 @@ try {
                 } catch {
                     Write-Warning "Client maps were installed, but an old backup could not be removed: $($_.Exception.Message)"
                 }
-                $clientModelMessage += "`r`nClient map packages and integrity catalog installed: $clientMapsPath"
+                $clientModelMessage += "`r`nClient map packages, authored props, and integrity catalog installed: $clientMapsPath"
             } catch {
-                if (Test-Path -LiteralPath $clientMapsPath) { Remove-Item -LiteralPath $clientMapsPath -Recurse -Force }
+                if ($installedClientMaps -and (Test-Path -LiteralPath $clientMapsPath)) { Remove-Item -LiteralPath $clientMapsPath -Recurse -Force }
                 if (Test-Path -LiteralPath $oldMapsPath) { Move-Item -LiteralPath $oldMapsPath -Destination $clientMapsPath }
-                if (Test-Path -LiteralPath $clientMapsManifestPath) { Remove-Item -LiteralPath $clientMapsManifestPath -Force }
+                if ($installedClientProps -and (Test-Path -LiteralPath $clientPropsPath)) { Remove-Item -LiteralPath $clientPropsPath -Recurse -Force }
+                if (Test-Path -LiteralPath $oldPropsPath) { Move-Item -LiteralPath $oldPropsPath -Destination $clientPropsPath }
+                if ($installedClientManifest -and (Test-Path -LiteralPath $clientMapsManifestPath)) { Remove-Item -LiteralPath $clientMapsManifestPath -Force }
                 if (Test-Path -LiteralPath $oldManifestPath) { Move-Item -LiteralPath $oldManifestPath -Destination $clientMapsManifestPath }
                 $clientModelMessage += "`r`nClient map copy failed: $($_.Exception.Message)"
             } finally {
                 if (Test-Path -LiteralPath $temporaryMapsPath) {
                     Remove-Item -LiteralPath $temporaryMapsPath -Recurse -Force
+                }
+                if (Test-Path -LiteralPath $temporaryPropsPath) {
+                    Remove-Item -LiteralPath $temporaryPropsPath -Recurse -Force
                 }
                 if (Test-Path -LiteralPath $temporaryManifestPath) {
                     Remove-Item -LiteralPath $temporaryManifestPath -Force

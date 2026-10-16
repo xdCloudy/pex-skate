@@ -25,6 +25,11 @@ XISO_SHA='fec88d03c7efd6205ab09be4abba70c0afd0eb27a5709f0a6235b828ba5ac11e'
 def digest(path):
     with path.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
 
+def prop_manifest_entry(private,label):
+    path=private/'native-props'/(label+'.skate')
+    if not path.is_file():return None
+    return {'path':'props/'+path.name,'sha256':digest(path)}
+
 def remove_intermediate(path,root):
     target=path.resolve();root=root.resolve()
     if target==root or not target.is_relative_to(root):
@@ -152,6 +157,8 @@ def convert_map(archive,work,maps,stage,game_exe,log,report):
     run([game_exe,'--assets',stage/'assets','--map',final,'--check-assets'],log,report)
     finished('validate')
     entry={'name':label,'path':'maps/'+final.name,'sha256':digest(final)}
+    prop_entry=prop_manifest_entry(stage/'assets/private',label)
+    if prop_entry is not None:entry['props']=prop_entry
     remove_intermediate(district_work,work)
     finished('hash_and_cleanup')
     entry['phase_seconds']=timings

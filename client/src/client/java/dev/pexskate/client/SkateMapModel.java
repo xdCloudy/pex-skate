@@ -107,7 +107,23 @@ public final class SkateMapModel {
                 try {
                     byte[] file = Files.readAllBytes(selected);
                     verifyCatalog(root, filename, file);
-                    return parse(file, filename);
+                    ParsedModel district = parse(file, filename);
+                    Path propsPath = root.resolve("props").resolve(filename);
+                    if (Files.isRegularFile(propsPath)) {
+                        try {
+                            long propsLimit = Math.min(MAX_MAP_BYTES, Runtime.getRuntime().maxMemory() / 2);
+                            if (Files.size(propsPath) > propsLimit) {
+                                throw new IOException("authored district prop package exceeds this client's size limit");
+                            }
+                            byte[] propsFile = Files.readAllBytes(propsPath);
+                            verifyPropsCatalog(root, filename, propsFile);
+                            ParsedModel props = parse(propsFile, filename + "-props");
+                            district = mergeProps(district, props);
+                        } catch (IOException | RuntimeException error) {
+                            LOGGER.warn("Could not load authored district props from {}; keeping the district geometry", propsPath, error);
+                        }
+                    }
+                    return district;
                 } catch (IOException error) {
                     throw new CompletionException(error);
                 }
@@ -179,6 +195,81 @@ public final class SkateMapModel {
         } catch (NoSuchAlgorithmException error) {
             throw new IOException("SHA-256 is unavailable on this Java runtime", error);
         }
+    }
+
+    private static void verifyPropsCatalog(Path root, String filename, byte[] file) throws IOException {
+        Path catalogPath = root.resolve("maps.json");
+        if (!Files.isRegularFile(catalogPath)) {
+            LOGGER.info("No converted Skate map catalog at {}; skipping district prop checksum validation", catalogPath);
+            return;
+        }
+        JsonElement document;
+        try (var reader = Files.newBufferedReader(catalogPath, StandardCharsets.UTF_8)) {
+            document = JsonParser.parseReader(reader);
+        } catch (RuntimeException error) {
+            throw new IOException("converted Skate map catalog is not valid JSON", error);
+        }
+        if (document == null || !document.isJsonArray()) {
+            throw new IOException("converted Skate map catalog must be a JSON array");
+        }
+        String expectedPath = "maps/" + filename;
+        JsonObject selected = null;
+        for (JsonElement item : document.getAsJsonArray()) {
+            if (!item.isJsonObject()) continue;
+            JsonObject entry = item.getAsJsonObject();
+            if (entry.has("path") && entry.get("path").isJsonPrimitive()
+                    && expectedPath.equals(entry.get("path").getAsString())) {
+                if (selected != null) throw new IOException("converted Skate map catalog contains duplicate entries for " + filename);
+                selected = entry;
+            }
+        }
+        if (selected == null) throw new IOException("converted Skate map catalog has no entry for " + filename);
+        if (!selected.has("props")) {
+            LOGGER.info("Map catalog has no authored prop checksum for {}; allowing legacy prop package", filename);
+            return;
+        }
+        JsonElement propsElement = selected.get("props");
+        if (!propsElement.isJsonObject()) throw new IOException("converted Skate prop catalog entry is invalid");
+        JsonObject props = propsElement.getAsJsonObject();
+        String expectedPropsPath = "props/" + filename;
+        if (!props.has("path") || !props.get("path").isJsonPrimitive()
+                || !expectedPropsPath.equals(props.get("path").getAsString())
+                || !props.has("sha256") || !props.get("sha256").isJsonPrimitive()) {
+            throw new IOException("converted Skate prop catalog entry does not match " + filename);
+        }
+        String expectedDigest = props.get("sha256").getAsString();
+        if (!expectedDigest.matches("(?i)[0-9a-f]{64}")) {
+            throw new IOException("converted Skate prop catalog has an invalid SHA-256 for " + filename);
+        }
+        try {
+            String actualDigest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(file));
+            if (!actualDigest.equalsIgnoreCase(expectedDigest)) {
+                throw new IOException("converted Skate prop checksum does not match maps.json for " + filename);
+            }
+        } catch (NoSuchAlgorithmException error) {
+            throw new IOException("SHA-256 is unavailable on this Java runtime", error);
+        }
+    }
+
+    private static ParsedModel mergeProps(ParsedModel district, ParsedModel props) throws IOException {
+        if (props.sky != null) throw new IOException("authored district prop package unexpectedly contains a sky");
+        long memoryEstimate = district.memoryEstimate + props.memoryEstimate;
+        if (memoryEstimate > Runtime.getRuntime().maxMemory() / 2) {
+            throw new IOException("district geometry and authored props exceed this client's combined memory limit");
+        }
+        int textureOffset = district.textures.size();
+        List<TextureData> textures = new ArrayList<>(district.textures.size() + props.textures.size());
+        textures.addAll(district.textures);
+        textures.addAll(props.textures);
+        List<PendingPrimitive> primitives = new ArrayList<>(district.primitives.size() + props.primitives.size());
+        primitives.addAll(district.primitives);
+        for (PendingPrimitive primitive : props.primitives) {
+            int texture = primitive.textureIndex == 0 ? 0 : primitive.textureIndex + textureOffset;
+            primitives.add(new PendingPrimitive(primitive.positions, primitive.normals, primitive.uv,
+                    primitive.vertexIndirectLight, primitive.indices, primitive.bounds, texture, primitive.color));
+        }
+        return new ParsedModel(district.filename, district.mapName, List.copyOf(textures),
+                List.copyOf(primitives), district.sky, memoryEstimate);
     }
 
     private static Path selectMapByFilename(String filename, Path maps) throws IOException {
@@ -496,7 +587,9 @@ public final class SkateMapModel {
                 + sky.positions.length * 4L + sky.indices.length * 4L > parserBudget)) {
             throw new IOException("SKATE authored sky exceeds this client's memory limit");
         }
-        return new ParsedModel(filename, mapName, List.copyOf(textures), List.copyOf(primitives), sky);
+        long parsedMemoryEstimate = geometryMemoryEstimate + (texturePixels + (sky == null ? 0 : sky.texturePixels)) * 4L;
+        if (sky != null) parsedMemoryEstimate += sky.positions.length * 4L + sky.indices.length * 4L;
+        return new ParsedModel(filename, mapName, List.copyOf(textures), List.copyOf(primitives), sky, parsedMemoryEstimate);
     }
 
     private static void skipRails(Reader reader, long count) throws IOException {
@@ -693,7 +786,7 @@ public final class SkateMapModel {
     public record FogSettings(float near, float far, float power, float maximum,
                               float red, float green, float blue) {}
     private record ParsedModel(String filename, String mapName, List<TextureData> textures,
-                               List<PendingPrimitive> primitives, PendingSky sky) {}
+                               List<PendingPrimitive> primitives, PendingSky sky, long memoryEstimate) {}
     private record PendingSky(float[] positions, float[] uv, int[] indices,
                               float fogNear, float fogFar, float fogPower, float fogMaximum,
                               float[] fogColor, float[] sunDirection, float sunScale, float exposure,
