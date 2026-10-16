@@ -258,7 +258,9 @@ final class SkateMapModel {
                         primitive.vertexIndirectLight, primitive.indices, primitive.bounds,
                         task.textureIds[primitive.textureIndex], primitive.color));
             }
-            model = new Model(task.parsed.filename, List.copyOf(primitives));
+            PendingSky pendingSky = task.parsed.sky;
+            Sky sky = pendingSky == null ? null : new Sky(pendingSky, task.textureIds[pendingSky.diffuseTextureIndex]);
+            model = new Model(task.parsed.filename, List.copyOf(primitives), sky);
             uploadTask = null;
             loadingFilename = null;
             LOGGER.info("Loaded Skate district {} with {} material groups",
@@ -278,6 +280,12 @@ final class SkateMapModel {
         Vec3 camera = context.gameRenderer().mainCamera().position();
         PoseStack matrices = new PoseStack();
         matrices.translate(-camera.x, -camera.y, -camera.z);
+        if (current.sky != null) {
+            Sky sky = current.sky;
+            context.submitNodeCollector().submitCustomGeometry(
+                    matrices, RenderTypes.entityTranslucent(sky.diffuseTexture),
+                    (pose, vertices) -> sky.draw(pose, vertices, camera));
+        }
         for (Primitive primitive : current.primitives) {
             if (primitive.distanceSquared(camera) > DRAW_DISTANCE * DRAW_DISTANCE) continue;
             BlockPos lightPosition = primitive.lightSamplePosition();
@@ -455,7 +463,113 @@ final class SkateMapModel {
             primitives.add(new PendingPrimitive(positions, normals, uv, vertexIndirectLight,
                     materialIndices, primitiveBounds(positions, materialIndices), texture, materialColors[material]));
         }
-        return new ParsedModel(filename, mapName, List.copyOf(textures), List.copyOf(primitives));
+        skipRails(reader, railCount);
+        if (doorCount != 0 || lightCount != 0 || routeCount != 0) {
+            throw new IOException("district doors, lights, and NPC routes are not supported by the Fabric renderer yet");
+        }
+        PendingSky sky = null;
+        int extensionCount = checkedInt(reader.u32(), 20, "map extension count");
+        for (int extension = 0; extension < extensionCount; extension++) {
+            byte[] tag = reader.take(4);
+            long schema = reader.u32();
+            int decodedSize = checkedInt(reader.u32(), MAX_MAP_BYTES, "map extension size");
+            if (tag[0] == 'S' && tag[1] == 'K' && tag[2] == 'Y' && tag[3] == 'B' && schema == 2) {
+                if (sky != null) throw new IOException("SKATE map contains more than one client sky extension");
+                if (geometryMemoryEstimate + texturePixels * 4L + decodedSize > parserBudget) {
+                    throw new IOException("SKATE sky extension exceeds this client's parse memory budget");
+                }
+                sky = parseSky(reader.stored(decodedSize), textures, geometryMemoryEstimate, texturePixels);
+            } else {
+                reader.skipStored(decodedSize);
+            }
+        }
+        if (reader.remaining() != 0) throw new IOException("SKATE map has unexplained trailing bytes");
+        if (sky != null && (texturePixels + sky.texturePixels > MAX_TEXTURE_PIXELS
+                || geometryMemoryEstimate + (texturePixels + sky.texturePixels) * 4L
+                + sky.positions.length * 4L + sky.indices.length * 4L > parserBudget)) {
+            throw new IOException("SKATE authored sky exceeds this client's memory limit");
+        }
+        return new ParsedModel(filename, mapName, List.copyOf(textures), List.copyOf(primitives), sky);
+    }
+
+    private static void skipRails(Reader reader, long count) throws IOException {
+        for (long i = 0; i < count; i++) {
+            reader.string();
+            reader.u32(); // closed
+            long representation = reader.u32();
+            if (representation == 0) {
+                int points = checkedInt(reader.u32(), 1_000_000, "rail point count");
+                reader.skip(Math.multiplyExact(points, 12));
+            } else if (representation == 1) {
+                reader.skip(24); // spline id, type signature, flags, trailing word
+                int segments = checkedInt(reader.u32(), 1_000_000, "rail segment count");
+                reader.skip(Math.multiplyExact(segments, 120));
+            } else {
+                throw new IOException("unsupported SKATE rail representation " + representation);
+            }
+        }
+    }
+
+    private static PendingSky parseSky(byte[] payload, List<TextureData> textures,
+                                       long geometryMemoryEstimate, long existingTexturePixels) throws IOException {
+        Reader reader = new Reader(payload);
+        int vertexCount = checkedInt(reader.u32(), 2_000_000, "sky vertex count");
+        int indexCount = checkedInt(reader.u32(), 6_000_000, "sky index count");
+        int width = checkedInt(reader.u32(), 16_384, "sky texture width");
+        int height = checkedInt(reader.u32(), 16_384, "sky texture height");
+        int sunWidth = checkedInt(reader.u32(), 16_384, "sky sun texture width");
+        int sunHeight = checkedInt(reader.u32(), 16_384, "sky sun texture height");
+        if (vertexCount == 0 || indexCount == 0 || indexCount % 3 != 0
+                || width == 0 || height == 0 || sunWidth == 0 || sunHeight == 0
+                || (long) width * height > MAX_TEXTURE_PIXELS
+                || (long) sunWidth * sunHeight > MAX_TEXTURE_PIXELS) {
+            throw new IOException("invalid SKATE authored sky dimensions");
+        }
+        long skyPixels = (long) width * height + (long) sunWidth * sunHeight;
+        long parseBudget = Runtime.getRuntime().maxMemory() / 2;
+        if (existingTexturePixels + skyPixels > MAX_TEXTURE_PIXELS
+                || geometryMemoryEstimate + (existingTexturePixels + skyPixels) * 4L
+                + vertexCount * 24L + indexCount * 4L > parseBudget) {
+            throw new IOException("SKATE authored sky exceeds this client's memory limit");
+        }
+        float fogNear = reader.f32(), fogFar = reader.f32();
+        float fogPower = reader.f32(), fogMaximum = reader.f32();
+        float[] fogColor = {reader.f32(), reader.f32(), reader.f32(), reader.f32()};
+        float[] sunDirection = {reader.f32(), reader.f32(), reader.f32()};
+        float sunScale = reader.f32(), exposure = reader.f32();
+        if (fogNear < 0 || fogFar <= fogNear || fogPower <= 0 || fogMaximum < 0 || fogMaximum > 1
+                || sunScale <= 0 || exposure < 0) {
+            throw new IOException("invalid SKATE authored sky environment values");
+        }
+        byte[] diffuse = reader.stored(Math.multiplyExact(Math.multiplyExact(width, height), 4));
+        byte[] sun = reader.stored(Math.multiplyExact(Math.multiplyExact(sunWidth, sunHeight), 4));
+        ByteBuffer vertexData = ByteBuffer.wrap(reader.stored(Math.multiplyExact(vertexCount, 20)))
+                .order(ByteOrder.LITTLE_ENDIAN);
+        float[] positions = new float[vertexCount * 3];
+        float[] uv = new float[vertexCount * 2];
+        for (int vertex = 0; vertex < vertexCount; vertex++) {
+            int p = vertex * 3, t = vertex * 2;
+            for (int axis = 0; axis < 3; axis++) {
+                float value = vertexData.getFloat();
+                if (!Float.isFinite(value)) throw new IOException("non-finite SKATE sky vertex");
+                positions[p + axis] = value;
+            }
+            uv[t] = vertexData.getFloat();
+            uv[t + 1] = vertexData.getFloat();
+            if (!Float.isFinite(uv[t]) || !Float.isFinite(uv[t + 1])) {
+                throw new IOException("non-finite SKATE sky texture coordinate");
+            }
+        }
+        ByteBuffer indexData = ByteBuffer.wrap(reader.stored(Math.multiplyExact(indexCount, 4)))
+                .order(ByteOrder.LITTLE_ENDIAN);
+        int[] indices = new int[indexCount];
+        for (int i = 0; i < indexCount; i++) indices[i] = checkedIndex(indexData.getInt(), vertexCount);
+        if (reader.remaining() != 0) throw new IOException("SKATE sky extension has unexplained trailing bytes");
+        int diffuseIndex = textures.size();
+        textures.add(new TextureData("retail_sky", width, height, diffuse));
+        return new PendingSky(positions, uv, indices, fogNear, fogFar, fogPower, fogMaximum,
+                fogColor, sunDirection, sunScale, exposure, diffuseIndex,
+                (long) width * height + (long) sunWidth * sunHeight);
     }
 
     private static void beginUpload(Minecraft client, ParsedModel parsed, long generation) {
@@ -568,9 +682,13 @@ final class SkateMapModel {
         return (int) value;
     }
 
-    private record Model(String filename, List<Primitive> primitives) {}
+    private record Model(String filename, List<Primitive> primitives, Sky sky) {}
     private record ParsedModel(String filename, String mapName, List<TextureData> textures,
-                               List<PendingPrimitive> primitives) {}
+                               List<PendingPrimitive> primitives, PendingSky sky) {}
+    private record PendingSky(float[] positions, float[] uv, int[] indices,
+                              float fogNear, float fogFar, float fogPower, float fogMaximum,
+                              float[] fogColor, float[] sunDirection, float sunScale, float exposure,
+                              int diffuseTextureIndex, long texturePixels) {}
     private static final class TextureData {
         private final String name;
         private final int width, height;
@@ -587,6 +705,47 @@ final class SkateMapModel {
                                     int[] indices, float[] bounds,
                                     int textureIndex, float[] color) {}
     private record ChunkMaterial(int material, int x, int z) {}
+
+    private static final class Sky {
+        private final float[] positions, uv;
+        private final int[] indices;
+        private final Identifier diffuseTexture;
+        @SuppressWarnings("unused")
+        private final float fogNear, fogFar, fogPower, fogMaximum, sunScale, exposure;
+        @SuppressWarnings("unused")
+        private final float[] fogColor, sunDirection;
+
+        private Sky(PendingSky data, Identifier diffuseTexture) {
+            positions = data.positions;
+            uv = data.uv;
+            indices = data.indices;
+            this.diffuseTexture = diffuseTexture;
+            fogNear = data.fogNear;
+            fogFar = data.fogFar;
+            fogPower = data.fogPower;
+            fogMaximum = data.fogMaximum;
+            fogColor = data.fogColor;
+            sunDirection = data.sunDirection;
+            sunScale = data.sunScale;
+            exposure = data.exposure;
+        }
+
+        private void draw(PoseStack.Pose pose, VertexConsumer output, Vec3 camera) {
+            Vector3f normal = new Vector3f(0.0f, 1.0f, 0.0f);
+            for (int index : indices) {
+                int point = index * 3;
+                int texCoord = index * 2;
+                output.addVertex(pose,
+                                (float) camera.x + positions[point],
+                                (float) camera.y + positions[point + 1],
+                                (float) camera.z + positions[point + 2])
+                        .setColor(1.0f, 1.0f, 1.0f, 1.0f)
+                        .setUv(uv[texCoord], uv[texCoord + 1])
+                        .setLight(0x00F000F0)
+                        .setNormal(normal.x, normal.y, normal.z);
+            }
+        }
+    }
 
     private static final class UploadTask {
         private final ParsedModel parsed;
@@ -729,5 +888,16 @@ final class SkateMapModel {
                 throw new IOException("SKATE block size overflow", error);
             }
         }
+
+        private void skipStored(int expected) throws IOException {
+            long method = u32();
+            int length = checkedInt(u32(), data.remaining(), "stored block length");
+            if (method > 1 || (method == 0 && length != expected)) {
+                throw new IOException("invalid SKATE extension storage block");
+            }
+            skip(length);
+        }
+
+        private int remaining() { return data.remaining(); }
     }
 }

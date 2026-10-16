@@ -43,6 +43,45 @@ def write_textures(output,root,textures):
             output.write(pending.popleft().result())
             name=next(names,None)
             if name is not None:pending.append(pool.submit(packed_texture,root,name,textures[name]))
+
+def sky_extension(sky_json):
+    if sky_json is None or not sky_json.is_file():return None
+    sky=json.loads(sky_json.read_text(encoding='utf-8'))
+    positions=np.asarray(sky['positions'],dtype='<f4')
+    uvs=np.asarray(sky['uvs'],dtype='<f4')
+    indices=np.asarray(sky['indices'],dtype='<u4')
+    if positions.ndim!=2 or positions.shape[1]!=3 or not len(positions) or len(positions)>2_000_000:
+        raise ValueError('Invalid authored sky vertex array')
+    if uvs.shape!=(len(positions),2) or not np.isfinite(positions).all() or not np.isfinite(uvs).all():
+        raise ValueError('Invalid authored sky vertex attributes')
+    if indices.ndim!=1 or not len(indices) or len(indices)%3 or len(indices)>6_000_000 or int(indices.max())>=len(positions):
+        raise ValueError('Invalid authored sky index array')
+    env=sky['environment'];fog=env['fog'];colour=np.asarray(fog['fog_colour'],dtype=np.float32)
+    sun=np.asarray(env['sun_direction'],dtype=np.float32)
+    if colour.shape!=(4,) or sun.shape!=(3,):raise ValueError('Invalid authored sky environment')
+    values=np.asarray([fog['fog_near'][0],fog['fog_far'][0],fog['fog_power'][0],fog['fog_max'][0],
+        *colour,*sun,env['sun_scale'],env['multiplier']],dtype='<f4')
+    if not np.isfinite(values).all() or values[1]<=values[0] or values[2]<=0 or not 0<=values[3]<=1:
+        raise ValueError('Invalid authored sky fog or lighting')
+    width,height=int(sky['width']),int(sky['height'])
+    sun_width,sun_height=int(sky['sun_width']),int(sky['sun_height'])
+    diffuse=sky_json.with_suffix('.rgba').read_bytes()
+    sun_rgba=sky_json.with_suffix('.sun.rgba').read_bytes()
+    if min(width,height,sun_width,sun_height)<=0 or width*height>32_000_000 or sun_width*sun_height>8_000_000:
+        raise ValueError('Invalid authored sky texture dimensions')
+    if len(diffuse)!=width*height*4 or len(sun_rgba)!=sun_width*sun_height*4:
+        raise ValueError('Authored sky texture byte count does not match its dimensions')
+    diffuse=np.frombuffer(diffuse,dtype=np.uint8).reshape(height,width,4)[::-1].tobytes()
+    sun_rgba=np.frombuffer(sun_rgba,dtype=np.uint8).reshape(sun_height,sun_width,4)[::-1].tobytes()
+    uvs=np.array(uvs,copy=True)
+    uvs[:,1]=1.0-uvs[:,1]
+    payload=io.BytesIO()
+    u(payload,len(positions),len(indices),width,height,sun_width,sun_height)
+    payload.write(values.tobytes())
+    stored(payload,diffuse);stored(payload,sun_rgba)
+    stored(payload,np.column_stack((positions,uvs)).astype('<f4',copy=False).tobytes())
+    stored(payload,indices.tobytes())
+    return payload.getvalue()
 def normalise(a):return a/np.maximum(np.linalg.norm(a,axis=1,keepdims=True),1e-20)
 
 class SpawnSelector:
@@ -103,7 +142,7 @@ def spawn_point(manifest,root):
         selector.consider(decode_rx2_clustered_meshes((root/entry['rx2']).read_bytes()))
     return selector.result(manifest['map_name'])
 
-def write(manifest_path,output,collision,report=lambda _:None, *, render_only=False, prepared_spawn=None):
+def write(manifest_path,output,collision,report=lambda _:None, *, render_only=False, prepared_spawn=None, sky_json=None):
     root=manifest_path.parent;m=json.loads(manifest_path.read_text());textures=m['textures']
     ids={name:i+1 for i,name in enumerate(sorted(textures))}
     excluded=set(m['normal_texture_policy']['excluded_texture_ids'])
@@ -185,9 +224,11 @@ def write(manifest_path,output,collision,report=lambda _:None, *, render_only=Fa
                 f.write(np.frombuffer(raw,dtype='>u4').astype('<u4').tobytes())
         extensions=[(b'WMET',json.dumps(m,separators=(',',':')).encode())]
         if not render_only:extensions.insert(0,(b'RWCM',collision.read_bytes()))
+        sky=sky_extension(sky_json)
+        if sky is not None:extensions.append((b'SKYB',sky))
         u(f,len(extensions))
         for tag,data in extensions:
-            f.write(tag);u(f,1,len(data));stored(f,data)
+            f.write(tag);u(f,2 if tag==b'SKYB' else 1,len(data));stored(f,data)
     report('Map written: '+m['map_name'])
     if not render_only:
         from tools.asset_pipeline.irradiance import write as write_irradiance

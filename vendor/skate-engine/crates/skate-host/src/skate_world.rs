@@ -46,10 +46,16 @@ pub(crate) fn validate_runtime(map: &SkateMap) -> Result<(), String> {
             skate_data::skate_map::validate_static_objects(map, extension)?;
             continue;
         }
-        if extension.tag == *b"SKYB" && extension.schema == 1 {
-            eprintln!(
-                "SKATE LIMITATION: SKYB retail sky retained; using the map horizon until its shader adapter is available."
-            );
+        if extension.tag == *b"SKYB" {
+            match extension.schema {
+                1 => eprintln!(
+                    "SKATE LIMITATION: SKYB retail sky retained; using the map horizon until its shader adapter is available."
+                ),
+                2 => eprintln!(
+                    "SKATE LIMITATION: client-rendered SKYB schema 2 retained; server simulation ignores presentation data."
+                ),
+                schema => return Err(format!("Unsupported SKYB schema {schema}")),
+            }
             continue;
         }
         if extension.tag != *b"WMET" && extension.tag != *b"WCFG" && extension.tag != *b"BMAT" {

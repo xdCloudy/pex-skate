@@ -4,7 +4,8 @@ Turns a player's own Skate 3 (Xbox 360) ISO or extracted game folder into PEX
 data: gameplay and character files under `<out>/assets/private/`, plus retail
 district packages under `<out>/maps/` and a `<out>/maps.json` catalog. Map files
 use the engine's portable `SKATE14` format and include render geometry, textures,
-retail collision and authored grind splines.
+retail collision, authored grind splines, and the district's client-rendered
+retail sky dome when its source assets resolve.
 
 The ISO mode reads the required files and `data/content/worldDIST_*.big` map
 archives from the disc image into a temporary folder, converts them, then removes

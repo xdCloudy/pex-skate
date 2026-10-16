@@ -130,7 +130,9 @@ def convert_map(archive,work,maps,stage,game_exe,log,report):
     build_archive(manifest_path,collision)
     finished('collision_archive')
     final=maps/(label+'.skate')
-    write_map(manifest_path,final,collision,report,prepared_spawn=spawn.result(label))
+    sky_json=stage/'assets/private/native-skies'/(label+'.json')
+    write_map(manifest_path,final,collision,report,prepared_spawn=spawn.result(label),
+              sky_json=sky_json if sky_json.is_file() else None)
     finished('write_map')
     from .dynamic_props import export as write_props
     caches=list((work/'dmo/cache').glob('DMO_*'))

@@ -174,6 +174,7 @@ def convert_game(game, out):
         work = Path(work)
         converted = exports.core(game, stage, work, report, log)
         exports.character(game, stage, work, report, log, converted)
+        exports.environment(game, stage, work, report, log, converted)
         if all((game / path).is_file() for path in HUD):
             try:
                 exports.gmod_hud(game, stage, work, report, log)
