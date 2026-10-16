@@ -42,7 +42,7 @@ public final class PexSkateClient implements ClientModInitializer {
             CATEGORY
     ));
     private static final KeyMapping PUSH_RIGHT = flickKey("key.pexskate.push_right", InputConstants.KEY_W);
-    private static final KeyMapping PUSH_LEFT = flickKey("key.pexskate.push_left", InputConstants.KEY_LEFT_SHIFT);
+    private static final KeyMapping PUSH_LEFT = flickKey("key.pexskate.push_left", InputConstants.KEY_LSHIFT);
     private static final KeyMapping BRAKE = flickKey("key.pexskate.brake", InputConstants.KEY_S);
     private static final KeyMapping STEER_LEFT = flickKey("key.pexskate.steer_left", InputConstants.KEY_A);
     private static final KeyMapping STEER_RIGHT = flickKey("key.pexskate.steer_right", InputConstants.KEY_D);
