@@ -33,8 +33,14 @@ cp "$plugin" "$work_dir/plugins/pex-skate.wasm"
 plugin_sha256=$(sha256sum "$work_dir/plugins/pex-skate.wasm" | cut -d ' ' -f 1)
 printf '{"entries":{"%s":{"permissions_requested":["fs.read.data"],"approved":true}}}\n' \
   "$plugin_sha256" > "$work_dir/plugins/permission_cache.json"
-printf 'online-mode=false\nenable-status=true\nserver-port=25565\nmax-players=8\n' \
-  > "$work_dir/server.properties"
+cat > "$work_dir/pumpkin.toml" <<'EOF'
+[networking.java]
+online_mode = false
+encryption = false
+
+[networking.java.authentication]
+enabled = false
+EOF
 
 cd "$work_dir"
 "$work_dir/$server_name" > server.log 2>&1 &
