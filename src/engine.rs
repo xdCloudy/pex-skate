@@ -6,6 +6,10 @@ use crate::physics::Controls;
 use skate_data::skate_map::SkateMap;
 use skate_host::bridge::{self, Session};
 use std::path::Path;
+use std::{fs, io::ErrorKind};
+
+const PROP_COLLISION_MAGIC: &[u8; 8] = b"PEXCOL1\0";
+const MAX_PROP_COLLISION_BOXES: usize = 8192;
 
 pub const SKATER_BONE_NAMES: [&str; 36] = [
     "TRAJECTORY",
@@ -121,6 +125,19 @@ impl SkateSession {
         let spawn = map.spawn;
         let heading = map.heading;
         let mut session = Session::new_with_skate_map(asset_root, &map)?;
+        let prop_collision_path = authored_prop_collision_path(asset_root, map_path)?;
+        match load_prop_collision(&prop_collision_path) {
+            Ok(triangles) if !triangles.is_empty() => {
+                let count = session.set_moving_collision(triangles)?;
+                eprintln!(
+                    "PEX_SKATE_PROP_COLLISION boxes={} triangles={}",
+                    count / 12,
+                    count
+                );
+            }
+            Ok(_) => {}
+            Err(error) => eprintln!("PEX_SKATE_PROP_COLLISION skipped: {error}"),
+        }
         let initial_pose = session
             .activate(spawn, heading)
             .map_err(|error| format!("could not activate Skate map {:?}: {error}", map.name))?;
@@ -271,6 +288,94 @@ impl SkateSession {
     }
 }
 
+fn authored_prop_collision_path(
+    asset_root: &Path,
+    map_path: &Path,
+) -> Result<std::path::PathBuf, String> {
+    let filename = map_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Skate map filename is invalid".to_owned())?;
+    if filename.is_empty()
+        || filename.contains("..")
+        || !filename
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return Err("Skate map filename is unsafe for prop collision lookup".into());
+    }
+    Ok(asset_root
+        .join("private")
+        .join("native-props")
+        .join(format!("{filename}.collision")))
+}
+
+fn load_prop_collision(path: &Path) -> Result<Vec<[[f32; 3]; 3]>, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("could not read {}: {error}", path.display())),
+    };
+    parse_prop_collision(&bytes)
+}
+
+fn parse_prop_collision(bytes: &[u8]) -> Result<Vec<[[f32; 3]; 3]>, String> {
+    if bytes.len() < 12 || &bytes[..8] != PROP_COLLISION_MAGIC {
+        return Err("invalid PEX prop collision header".into());
+    }
+    let count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    if count > MAX_PROP_COLLISION_BOXES || bytes.len() != 12 + count * 24 {
+        return Err("invalid PEX prop collision box count or package length".into());
+    }
+    let mut triangles = Vec::with_capacity(count * 12);
+    for record in bytes[12..].chunks_exact(24) {
+        let mut values = [0.0f32; 6];
+        for (index, bytes) in record.chunks_exact(4).enumerate() {
+            values[index] = f32::from_le_bytes(bytes.try_into().unwrap());
+        }
+        let lower = [values[0], values[1], values[2]];
+        let upper = [values[3], values[4], values[5]];
+        if values.iter().any(|value| !value.is_finite())
+            || (0..3)
+                .any(|axis| upper[axis] - lower[axis] < 0.04 || upper[axis] - lower[axis] > 128.0)
+        {
+            return Err(format!(
+                "invalid PEX prop collision bounds in box {}",
+                triangles.len() / 12
+            ));
+        }
+        triangles.extend(box_triangles(lower, upper));
+    }
+    Ok(triangles)
+}
+
+fn box_triangles(min: [f32; 3], max: [f32; 3]) -> [[[f32; 3]; 3]; 12] {
+    let p = [
+        [min[0], min[1], min[2]],
+        [max[0], min[1], min[2]],
+        [max[0], max[1], min[2]],
+        [min[0], max[1], min[2]],
+        [min[0], min[1], max[2]],
+        [max[0], min[1], max[2]],
+        [max[0], max[1], max[2]],
+        [min[0], max[1], max[2]],
+    ];
+    [
+        [p[0], p[3], p[2]],
+        [p[0], p[2], p[1]],
+        [p[4], p[5], p[6]],
+        [p[4], p[6], p[7]],
+        [p[0], p[4], p[7]],
+        [p[0], p[7], p[3]],
+        [p[1], p[2], p[6]],
+        [p[1], p[6], p[5]],
+        [p[0], p[1], p[5]],
+        [p[0], p[5], p[4]],
+        [p[3], p[7], p[6]],
+        [p[3], p[6], p[2]],
+    ]
+}
+
 fn respawn_pressed(current: bool, previous: bool) -> bool {
     current && !previous
 }
@@ -334,7 +439,9 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
 
 #[cfg(test)]
 mod tests {
-    use super::{quantize_rotation, respawn_pressed, to_engine_controls};
+    use super::{
+        box_triangles, parse_prop_collision, quantize_rotation, respawn_pressed, to_engine_controls,
+    };
     use crate::physics::Controls;
 
     #[test]
@@ -406,5 +513,46 @@ mod tests {
         let rotation = quantize_rotation([0.0, 0.0, half, half]);
         assert_eq!(rotation, [0, 0, 23170, 23170]);
         assert_eq!(quantize_rotation([f32::NAN; 4]), [0, 0, 0, i16::MAX]);
+    }
+
+    #[test]
+    fn prop_collision_package_expands_bounds_into_outward_facing_triangles() {
+        let mut bytes = b"PEXCOL1\0".to_vec();
+        bytes.extend(1u32.to_le_bytes());
+        for value in [0.0f32, 0.0, 0.0, 1.0, 1.0, 1.0] {
+            bytes.extend(value.to_le_bytes());
+        }
+        let triangles = parse_prop_collision(&bytes).unwrap();
+        assert_eq!(triangles.len(), 12);
+        for triangle in triangles {
+            let [a, b, c] = triangle;
+            let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let normal = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let center = [
+                (a[0] + b[0] + c[0]) / 3.0,
+                (a[1] + b[1] + c[1]) / 3.0,
+                (a[2] + b[2] + c[2]) / 3.0,
+            ];
+            let outward = [center[0] - 0.5, center[1] - 0.5, center[2] - 0.5];
+            assert!(normal[0] * outward[0] + normal[1] * outward[1] + normal[2] * outward[2] > 0.0);
+        }
+    }
+
+    #[test]
+    fn prop_collision_package_rejects_invalid_bounds_and_trailing_data() {
+        let mut bytes = b"PEXCOL1\0".to_vec();
+        bytes.extend(1u32.to_le_bytes());
+        for value in [0.0f32, 0.0, 0.0, 1.0, 1.0, 0.01] {
+            bytes.extend(value.to_le_bytes());
+        }
+        assert!(parse_prop_collision(&bytes).is_err());
+        bytes.extend([0]);
+        assert!(parse_prop_collision(&bytes).is_err());
+        assert_eq!(box_triangles([0.0; 3], [1.0; 3]).len(), 12);
     }
 }

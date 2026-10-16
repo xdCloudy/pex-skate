@@ -112,6 +112,50 @@ def transform_mesh(arrays, index, transform):
     return values
 
 
+def collision_bounds(arrays, meshes):
+    lower = np.full(3, np.inf, dtype=np.float64)
+    upper = np.full(3, -np.inf, dtype=np.float64)
+    found = False
+    for mesh in meshes:
+        vertices = arrays.get(f"vertices_{mesh['index']}")
+        if vertices is None or not len(vertices):
+            continue
+        lower = np.minimum(lower, np.min(vertices, axis=0))
+        upper = np.maximum(upper, np.max(vertices, axis=0))
+        found = True
+    if not found or not np.isfinite(lower).all() or not np.isfinite(upper).all():
+        return None
+    size = upper - lower
+    # Tiny decals and zero-thickness planes should not become solid boxes.
+    if np.any(size < 0.04) or np.any(size > 128.0):
+        return None
+    return [lower.tolist(), upper.tolist()]
+
+
+def write_collision_boxes(path, instances):
+    boxes = [item['collision_bounds'] for item in instances if 'collision_bounds' in item]
+    if len(boxes) > 8_192:
+        path.unlink(missing_ok=True)
+        return 0
+    temporary = path.with_suffix(path.suffix + '.new')
+    try:
+        with temporary.open('wb') as output:
+            output.write(struct.pack('<8sI', b'PEXCOL1\0', len(boxes)))
+            for lower, upper in boxes:
+                values = (*lower, *upper)
+                if not np.isfinite(values).all():
+                    raise ValueError('Non-finite authored prop collision bounds')
+                output.write(struct.pack('<6f', *values))
+        if boxes:
+            temporary.replace(path)
+        else:
+            temporary.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return len(boxes)
+
+
 def catalog(cache_roots):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'vendor/utt'))
     import rx2_parser
@@ -200,7 +244,11 @@ def export(manifest_path, cache_roots, output, *, catalog_path=None):
                     used.update(mesh['retail_texture_ids'].values())
             path = f'{number}.npz'; np.savez(root/path, **arrays)
             models.append(dict(asset_id=item['instance_id'], meshes=meshes, npz=path))
-            report['instances'].append(dict(item, model_asset=template['asset_id'], meshes=len(meshes)))
+            bounds = collision_bounds(arrays, meshes)
+            instance = dict(item, model_asset=template['asset_id'], meshes=len(meshes))
+            if bounds is not None:
+                instance['collision_bounds'] = bounds
+            report['instances'].append(instance)
         if models:
             manifest = dict(map_name=district['map_name'], district_name=district['district_name'],
                 models=models, textures={key:textures[key] for key in sorted(used)},
@@ -213,8 +261,10 @@ def export(manifest_path, cache_roots, output, *, catalog_path=None):
                 temporary.replace(output)
             finally:
                 temporary.unlink(missing_ok=True)
+            report['collision_boxes'] = write_collision_boxes(output.with_suffix('.collision'), report['instances'])
         else:
             output.unlink(missing_ok=True)
+            output.with_suffix('.collision').unlink(missing_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.with_suffix('.json').write_text(json.dumps(report, indent=2))
     return len(report['instances']), len(report['unresolved'])

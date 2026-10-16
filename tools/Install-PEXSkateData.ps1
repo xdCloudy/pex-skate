@@ -144,6 +144,21 @@ try {
             if ($propsHash -ne $entry.props.sha256.ToLowerInvariant()) {
                 throw "Converted prop hash does not match maps.json: $($entry.props.path)"
             }
+            if ($entry.props.collision_path) {
+                $expectedCollisionPath = "private/native-props/" + [System.IO.Path]::GetFileNameWithoutExtension($entry.path) + ".collision"
+                if ($entry.props.collision_path -ne $expectedCollisionPath -or
+                    $entry.props.collision_sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+                    throw "Conversion produced invalid prop collision metadata for $($entry.path)."
+                }
+                $collisionSource = Join-Path $stagePath ("assets\" + $entry.props.collision_path.Replace('/', '\'))
+                if (-not (Test-Path -LiteralPath $collisionSource -PathType Leaf)) {
+                    throw "Conversion did not produce $($entry.props.collision_path). Nothing was installed."
+                }
+                $collisionHash = (Get-FileHash -LiteralPath $collisionSource -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($collisionHash -ne $entry.props.collision_sha256.ToLowerInvariant()) {
+                    throw "Converted prop collision hash does not match maps.json: $($entry.props.collision_path)"
+                }
+            }
         }
     }
 

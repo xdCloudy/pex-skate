@@ -28,7 +28,12 @@ def digest(path):
 def prop_manifest_entry(private,label):
     path=private/'native-props'/(label+'.skate')
     if not path.is_file():return None
-    return {'path':'props/'+path.name,'sha256':digest(path)}
+    entry={'path':'props/'+path.name,'sha256':digest(path)}
+    collision=private/'native-props'/(label+'.collision')
+    if collision.is_file():
+        entry['collision_path']='private/native-props/'+collision.name
+        entry['collision_sha256']=digest(collision)
+    return entry
 
 def remove_intermediate(path,root):
     target=path.resolve();root=root.resolve()
