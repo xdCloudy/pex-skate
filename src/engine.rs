@@ -111,6 +111,7 @@ impl SkateSession {
         heading: f32,
     ) -> Result<Self, String> {
         let mut session = Session::new(asset_root, collision_triangles, rails, spawn, heading)?;
+        session.set_difficulty(load_difficulty(asset_root)?);
         let initial_pose = session.activate(spawn, heading)?;
         Ok(Self {
             session,
@@ -129,6 +130,7 @@ impl SkateSession {
         let spawn = map.spawn;
         let heading = map.heading;
         let mut session = Session::new_with_skate_map(asset_root, &map)?;
+        session.set_difficulty(load_difficulty(asset_root)?);
         let prop_collision_path = authored_prop_collision_path(asset_root, map_path)?;
         match load_prop_collision(&prop_collision_path) {
             Ok(triangles) if !triangles.is_empty() => {
@@ -320,6 +322,26 @@ fn authored_prop_collision_path(
         .join(format!("{filename}.collision")))
 }
 
+fn load_difficulty(asset_root: &Path) -> Result<u32, String> {
+    let path = asset_root.join("settings").join("difficulty.txt");
+    match fs::read_to_string(&path) {
+        Ok(value) => {
+            parse_difficulty(&value).map_err(|error| format!("{}: {error}", path.display()))
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(format!("could not read {}: {error}", path.display())),
+    }
+}
+
+fn parse_difficulty(value: &str) -> Result<u32, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "easy" | "" => Ok(0),
+        "normal" => Ok(1),
+        "hardcore" => Ok(2),
+        _ => Err("expected easy, normal, or hardcore".into()),
+    }
+}
+
 fn load_prop_collision(path: &Path) -> Result<Vec<[[f32; 3]; 3]>, String> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
@@ -496,8 +518,8 @@ fn to_engine_controls(controls: Controls) -> bridge::Controls {
 #[cfg(test)]
 mod tests {
     use super::{
-        box_triangles, load_prop_collision, parse_prop_collision, pressed_edge, quantize_rotation,
-        to_engine_controls,
+        box_triangles, load_difficulty, load_prop_collision, parse_difficulty,
+        parse_prop_collision, pressed_edge, quantize_rotation, to_engine_controls,
     };
     use crate::physics::Controls;
 
@@ -523,6 +545,34 @@ mod tests {
         assert_eq!(input.left[0], -16_384);
         assert_eq!(input.left[1], i16::MAX);
         assert_eq!(input.right, [-i16::MAX, i16::MAX]);
+    }
+
+    #[test]
+    fn parses_supported_skate_physics_difficulties_case_insensitively() {
+        assert_eq!(parse_difficulty("easy\n").unwrap(), 0);
+        assert_eq!(parse_difficulty("Normal").unwrap(), 1);
+        assert_eq!(parse_difficulty("HARDCORE").unwrap(), 2);
+        assert!(parse_difficulty("motorized").is_err());
+    }
+
+    #[test]
+    fn difficulty_setting_defaults_to_easy_and_reads_server_config() {
+        let root = std::env::temp_dir().join(format!(
+            "pex-skate-difficulty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(load_difficulty(&root).unwrap(), 0);
+        std::fs::create_dir_all(root.join("settings")).unwrap();
+        std::fs::write(root.join("settings/difficulty.txt"), "normal\n").unwrap();
+        assert_eq!(load_difficulty(&root).unwrap(), 1);
+        std::fs::write(root.join("settings/difficulty.txt"), "expert\n").unwrap();
+        assert!(load_difficulty(&root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

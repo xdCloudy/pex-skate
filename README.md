@@ -80,6 +80,8 @@ The `--xex` argument accepts either the ISO or `default.xex` from an already ext
 
 The server command `/skate` is also available for server-side toggling. The default camera is switched to third-person while the client mode is active.
 
+The server physics difficulty can be selected for all new sessions with `<server>/plugins/data/pex-skate/settings/difficulty.txt`. Set it to `easy`, `normal`, or `hardcore` (case-insensitive); if the file is absent, the engine's Easy mode is used. Restart the PEX server after changing the setting.
+
 ## Controls
 
 PEX Skate uses Skate 3's push, brake, steering, grabs, board dismount, and Flick-It trick inputs. The keyboard reference below follows [SkateGM's documented keyboard layout](https://github.com/the-schwilliam/SkateGM#keyboard); the status column shows which actions this PEX port currently sends to the Skate simulation. PEX Skate polls the first controller SDL3 recognizes as a standard gamepad and reads its standard face buttons, sticks, triggers, and D-pad. Xbox-style labels are used below; PlayStation and other controllers use the corresponding SDL-mapped positions.
