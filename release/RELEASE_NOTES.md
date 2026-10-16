@@ -15,4 +15,4 @@ See `INSTALL.md` in `PEX-Skate-26.3.zip`. Each player needs the Fabric client an
 
 ### Known limitations
 
-This is an alpha and is not production-ready. It has not been validated in a live PEX server/client session using converted Skate 3 data. District props currently render and collide at their initial placements but do not move or react to impacts. NPC skaters, several retail visual effects, and some Skate 3 interactions are not implemented. Multiplayer behavior and long-distance skating still need live gameplay validation.
+This is an alpha and is not production-ready. It has not been validated in a live PEX server/client session using converted Skate 3 data. Swept board impacts can translate authored district props, damp their motion, and synchronize the transforms to clients; prop rotation, authored mass, and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions are not implemented. Multiplayer behavior and long-distance skating still need live gameplay validation.
