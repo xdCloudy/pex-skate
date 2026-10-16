@@ -14,6 +14,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Keyboard and standard gamepad controls for skating and tricks.
 - Gamepad axes and buttons are refreshed through SDL's supported manual update path inside Minecraft's client tick.
 - SHA-256 manifests for the downloadable release files.
+- CI verifies plugin startup and performs the Minecraft 26.3 status handshake against the pinned PEX server.
 
 ### Install
 
