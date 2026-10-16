@@ -41,7 +41,10 @@ public final class PexSkateClient implements ClientModInitializer {
     private static final KeyMapping FLICK_RIGHT = flickKey("key.pexskate.flick_right", InputConstants.KEY_RIGHT);
     private static final KeyMapping FLICK_UP = flickKey("key.pexskate.flick_up", InputConstants.KEY_UP);
     private static final KeyMapping FLICK_DOWN = flickKey("key.pexskate.flick_down", InputConstants.KEY_DOWN);
+    private static final KeyMapping GRAB_LEFT = flickKey("key.pexskate.grab_left", InputConstants.KEY_Q);
+    private static final KeyMapping GRAB_RIGHT = flickKey("key.pexskate.grab_right", InputConstants.KEY_E);
 
+    private static volatile boolean skateModeActive;
     private boolean skating;
     private CameraType previousCamera;
     private long gamepadHandle;
@@ -74,6 +77,7 @@ public final class PexSkateClient implements ClientModInitializer {
                 client.options.setCameraType(previousCamera);
             }
             skating = false;
+            skateModeActive = false;
             previousCamera = null;
         });
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
@@ -145,6 +149,7 @@ public final class PexSkateClient implements ClientModInitializer {
             return;
         }
         skating = state.active();
+        skateModeActive = skating;
         if (skating) {
             previousCamera = client.options.getCameraType();
             client.options.setCameraType(CameraType.THIRD_PERSON_BACK);
@@ -152,6 +157,10 @@ public final class PexSkateClient implements ClientModInitializer {
             client.options.setCameraType(previousCamera);
             previousCamera = null;
         }
+    }
+
+    public static boolean isSkateModeActive() {
+        return skateModeActive;
     }
 
     private static void clearBoards() {
@@ -185,10 +194,12 @@ public final class PexSkateClient implements ClientModInitializer {
         float steer = clamp(keyAxis(client.options.keyRight.isDown(), client.options.keyLeft.isDown()) + pad.leftX());
         float rightX = clamp(keyAxis(FLICK_RIGHT.isDown(), FLICK_LEFT.isDown()) + pad.rightX());
         float rightY = clamp(keyAxis(FLICK_UP.isDown(), FLICK_DOWN.isDown()) + pad.rightY());
+        float leftTrigger = Math.max(pad.leftTrigger(), GRAB_LEFT.isDown() ? 1.0f : 0.0f);
+        float rightTrigger = Math.max(pad.rightTrigger(), GRAB_RIGHT.isDown() ? 1.0f : 0.0f);
 
         ClientPlayNetworking.send(new ControlPayload(
                 (byte) 3, (byte) flags,
-                quantizeTrigger(pad.leftTrigger()), quantizeTrigger(pad.rightTrigger()),
+                quantizeTrigger(leftTrigger), quantizeTrigger(rightTrigger),
                 quantize(pad.forward()), quantize(steer), quantize(rightX), quantize(rightY)));
     }
 

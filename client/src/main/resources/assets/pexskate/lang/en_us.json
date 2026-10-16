@@ -4,5 +4,7 @@
   "key.pexskate.flick_right": "Skate Flick Right",
   "key.pexskate.flick_up": "Skate Flick Up",
   "key.pexskate.flick_down": "Skate Flick Down",
+  "key.pexskate.grab_left": "Skate Grab Left",
+  "key.pexskate.grab_right": "Skate Grab Right",
   "key.category.pexskate.controls": "PEX Skate"
 }

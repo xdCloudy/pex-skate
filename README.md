@@ -44,19 +44,30 @@ To build only the Fabric companion, run `client/gradlew.bat build` from the repo
 
 ## Skate 3 data setup
 
-### One-click ISO conversion on Windows
+### Windows ISO conversion
 
-1. Install the PEX plugin on the server and start it once so the `plugins/data/pex-skate/` folder is created. Stop the server.
-2. Download and extract `PEX-Skate-ISO-Setup-Windows.zip` from the [GitHub releases](https://github.com/xdCloudy/pex-skate/releases).
-3. Run `Install-PEXSkateData.bat`. Select your legally obtained Skate 3 Xbox 360 `.iso`, then select `<server>/plugins/data/pex-skate/`. If the server is remote, run the helper on a machine with access to that folder, use a mounted server directory, or copy the generated `private/` folder to the server afterward.
-4. The bundled converter reads the needed files directly from the ISO and converts them locally. It checks required outputs before installing the generated `private/` asset tree. If converted assets already exist, it asks before replacing them. Other files in the selected folder are kept, and `conversion.log` is written for troubleshooting.
-5. Start or restart the server. The plugin data root should now include `private/game.json`, `private/stock/skater-collections.json`, `private/stock/data/config/input.cfg`, and `private/skater.glb`. `/skate` reports a readable error if required data is missing.
+The release converter is a portable Windows executable. It takes a user-provided Xbox 360 ISO, locally extracts only the inputs needed by this PEX port, converts them, validates the result, then installs the generated files into the PEX plugin data folder.
 
-The ISO, extracted temporary files, and converted game data stay on your machine. Nothing is uploaded or included in GitHub releases. The setup tool is based on [SkateGM's ISO-aware exporter](https://github.com/the-schwilliam/SkateGM), pinned and licensed in `tools/skategm-exporter/`; its standalone `.exe` runs without a separate Python installation. The release setup ZIP includes the corresponding exporter source. This setup currently targets Windows; Linux/macOS users can follow `tools/skategm-exporter/README.md` and install its Python requirements.
+1. Install the PEX plugin on the server and start it once. This creates `<server>/plugins/data/pex-skate/`. Stop the server before installing game data.
+2. Download and extract the complete `PEX-Skate-ISO-Setup-Windows.zip` from the [GitHub releases](https://github.com/xdCloudy/pex-skate/releases). Keep `Install-PEXSkateData.bat`, `Install-PEXSkateData.ps1`, and `skategm-convert.exe` together in the extracted folder; the batch file expects the executable beside it.
+3. Run `Install-PEXSkateData.bat`. In the file picker, select your legally obtained Skate 3 Xbox 360 `.iso`. In the folder picker, select the PEX plugin data folder itself, normally `<server>/plugins/data/pex-skate/` (not its `private/` subfolder).
+4. The converter scans the ISO and extracts the required files into a temporary working folder. It converts animation banks, gameplay/state graphs and input settings, physics skeleton data, skater collections, the default skater model and textures, and available Skate 3 trick-display assets. It then checks for required outputs, including `private/game.json`, `private/stock/physics-skeletons.json`, `private/stock/skater-collections.json`, and `private/skater.glb`.
+5. After validation, the installer moves the generated `assets/private/` tree into `<plugin-data>/private/` and writes `conversion.log` in the plugin data folder. If `private/` already exists, it asks before replacing those converted assets; other files in the plugin data folder are kept. Temporary ISO extracts are removed after conversion.
+6. Restart the server. The plugin needs the converted data before Skate mode can run; `/skate` reports a readable error if required files are missing.
 
-The converter reads `default.xex`, animation files, `miscload.big`, `miscboot.big`, `db.big`, and `createacharacter.big` directly from the ISO; it also reads the trick-display archives when present. It copies only those required disc paths into a temporary folder, converts the gameplay graphs/input settings, animation banks, physics skeleton, skater collections, and default skater model, then deletes the temporary extraction. It does not install Skate 3 maps, music, or sounds. The helper needs access to the PEX data folder: run it on the server machine, use a mounted server directory, or copy the generated `private/` folder to a remote server after conversion.
+The conversion runs locally: the ISO and converted game data are not uploaded, committed, or included in the release. The release ZIP includes the corresponding exporter source and third-party notices. The helper currently targets Windows and runs without a separate Python install. Keep enough free disk space for temporary extraction and conversion. If the server is remote, run the helper where its data folder is accessible, use a mounted server directory, or copy the generated `private/` folder to `<server>/plugins/data/pex-skate/` after conversion.
 
-For a manual conversion on Windows, macOS, or Linux, install Python 3.13+, NumPy, and Pillow, then run `python tools/skategm-exporter/convert.py --xex <path-to-your.iso> --out <output-folder>`. On success, `<output-folder>/assets/private/` contains the generated game data and `conversion.log` records the conversion. Copy that `private/` directory into the PEX Skate plugin data folder. The source exporter also accepts `default.xex` from an already extracted game folder. See [`tools/skategm-exporter/README.md`](tools/skategm-exporter/README.md) for requirements and the optional native decoder build.
+This PEX setup exports the gameplay, animation, physics, skater, and trick-display data listed above. It does not currently install Skate 3 maps, music, or sounds. The converter is based on [SkateGM's exporter](https://github.com/the-schwilliam/SkateGM), pinned and licensed in `tools/skategm-exporter/`.
+
+### Manual conversion from source
+
+For Windows, macOS, or Linux, install Python 3.13+, NumPy, and Pillow. Then, from the repository root, run:
+
+```powershell
+python tools/skategm-exporter/convert.py --xex "<path-to-your.iso>" --out "<output-folder>"
+```
+
+The `--xex` argument accepts either the ISO or `default.xex` from an already extracted Skate 3 game folder (keep the game's `data/` folder beside `default.xex`). On success, `<output-folder>/assets/private/` contains the converted data and `<output-folder>/conversion.log` records the conversion. Copy the `private/` directory into `<server>/plugins/data/pex-skate/`. See [`tools/skategm-exporter/README.md`](tools/skategm-exporter/README.md) for source setup and the optional native decoder build.
 
 ## Install and use
 
@@ -81,9 +92,9 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | Steer | A / D | Left stick X | Supported |
 | Pump/forward axis | — | Left stick Y | Supported |
 | Flick-It tricks | Arrow keys | Right stick | Supported |
-| Grab | Q / E | Left / right trigger | Controller triggers supported; keyboard grab bindings pending |
-| Get on/off board | F | — | Not implemented in PEX Skate |
-| Interact | C | — | Not implemented in PEX Skate |
+| Grab with left / right hand | Q / E | Left / right trigger | Supported |
+| Get on/off board | F | Skate 3's in-game board controls | Not implemented in PEX Skate |
+| Interact | C | Skate 3's in-game interact control | Not implemented in PEX Skate |
 | D-pad | I / K / U / O | D-pad | Not implemented in PEX Skate |
 | Menu / start / back | Z / Enter / Backspace | SkateGM menu controls | Not implemented in PEX Skate |
 | Respawn / exit free camera | R / L | LB + X respawns | Not implemented in PEX Skate |
@@ -94,7 +105,7 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | Skate 3 music | Z + Ctrl/arrows | LB + right stick | Not implemented in PEX Skate |
 | Settings / map / park editor / replays | — | LB + A / Y / B / RB | Not implemented in PEX Skate |
 
-The Minecraft port wires toggle, pushes, brake, steering/pumping, Flick-It trick axes, and controller grab triggers into the simulation. Keyboard grab keys and the additional menus, dismount, interaction, respawn, items, maps, and minigames are not part of this PEX mod yet. The controller mapping uses the first connected device that SDL3 recognizes as a standard gamepad.
+SkateGM documents the broader original keyboard and controller layout; the table marks which actions this PEX port currently handles. The supported PEX Skate keys can be rebound under Controls → Key Binds → PEX Skate. While skating, Q/E are reserved for grabs and Minecraft's matching drop/inventory actions are suppressed. For a gamepad, SDL3 reads the first connected standard gamepad. The Minecraft port currently sends Skate mode toggle, pushes, brake, steering/pumping, Flick-It trick axes, and grab triggers to the simulation. The remaining SkateGM actions are reference mappings only and are not implemented in PEX Skate yet.
 
 ## Protocol
 
