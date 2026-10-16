@@ -41,6 +41,11 @@ public final class PexSkateClient implements ClientModInitializer {
             InputConstants.KEY_G,
             CATEGORY
     ));
+    private static final KeyMapping PUSH_RIGHT = flickKey("key.pexskate.push_right", InputConstants.KEY_W);
+    private static final KeyMapping PUSH_LEFT = flickKey("key.pexskate.push_left", InputConstants.KEY_LEFT_SHIFT);
+    private static final KeyMapping BRAKE = flickKey("key.pexskate.brake", InputConstants.KEY_S);
+    private static final KeyMapping STEER_LEFT = flickKey("key.pexskate.steer_left", InputConstants.KEY_A);
+    private static final KeyMapping STEER_RIGHT = flickKey("key.pexskate.steer_right", InputConstants.KEY_D);
     private static final KeyMapping FLICK_LEFT = flickKey("key.pexskate.flick_left", InputConstants.KEY_LEFT);
     private static final KeyMapping FLICK_RIGHT = flickKey("key.pexskate.flick_right", InputConstants.KEY_RIGHT);
     private static final KeyMapping FLICK_UP = flickKey("key.pexskate.flick_up", InputConstants.KEY_UP);
@@ -213,13 +218,12 @@ public final class PexSkateClient implements ClientModInitializer {
 
         Gamepad pad = readGamepad();
         int flags = 0;
-        if (client.options.keyUp.isDown() || client.options.keyJump.isDown()
-                || pad.pushRight()) flags |= 1;
-        if (client.options.keyShift.isDown() || pad.pushLeft()) flags |= 2;
-        if (client.options.keyDown.isDown() || pad.brake()) flags |= 4;
+        if (PUSH_RIGHT.isDown() || client.options.keyJump.isDown() || pad.pushRight()) flags |= 1;
+        if (PUSH_LEFT.isDown() || pad.pushLeft()) flags |= 2;
+        if (BRAKE.isDown() || pad.brake()) flags |= 4;
         if (DISMOUNT.isDown() || pad.dismount()) flags |= 0x80;
 
-        float steer = clamp(keyAxis(client.options.keyRight.isDown(), client.options.keyLeft.isDown()) + pad.leftX());
+        float steer = clamp(keyAxis(STEER_RIGHT.isDown(), STEER_LEFT.isDown()) + pad.leftX());
         float rightX = clamp(keyAxis(FLICK_RIGHT.isDown(), FLICK_LEFT.isDown()) + pad.rightX());
         float rightY = clamp(keyAxis(FLICK_UP.isDown(), FLICK_DOWN.isDown()) + pad.rightY());
         float leftTrigger = Math.max(pad.leftTrigger(), GRAB_LEFT.isDown() ? 1.0f : 0.0f);

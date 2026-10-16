@@ -87,7 +87,7 @@ PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keybo
 | --- | --- | --- | --- |
 | Toggle Skate mode | G | — | Supported |
 | Right-foot push | W or Space | A | Supported |
-| Left-foot push | Shift | X | Supported |
+| Left-foot push | Left Shift | X | Supported |
 | Brake | S | B | Supported |
 | Steer | A / D | Left stick X | Supported |
 | Pump/forward axis | — | Left stick Y | Supported |
@@ -111,7 +111,7 @@ SkateGM documents the broader original keyboard and controller layout; the table
 
 The client sends a `pexskate:control` custom payload once per client tick while Skate mode is active. The v5 body carries action flags for pushes, brake and dismount, four D-pad directions, left/right trigger pressure, and four signed stick axes; triggers feed the engine's grab inputs, the D-pad drives Skate 3 gameplay gestures, and the dismount flag drives the engine's on/off-board toggle. Left-stick X steers, and right-stick X/Y drive Skate 3's Flick-It/trick recognition. The server accepts v1 through v4 packets for compatibility. Server state v5 includes the engine root, board position/quaternion, velocity, score values, clean/sketchy flags, UTF-8 trick display name, hips position, 36-joint positions and world-space quantized rotations, plus the camera offset, forward/up vectors and field of view. State v4 remains readable by the client; missing rotations are treated as identity. The client interpolates the skeletal, rotation and camera snapshots.
 
-The server clears controls after 250 ms without a fresh client packet, removes player state on disconnect, and sends engine state to clients at no more than 20 updates per second per skater. Without the locally converted mesh, the client uses a simplified six-part retarget of the engine skeleton onto the Minecraft skin. The retail skater uses the engine's weighted skeleton, but detailed facial morphs and some hand/foot details remain unverified in Minecraft.
+The supported keyboard actions, including right/left-foot push, brake and steering, are rebindable under Controls → Key Binds → PEX Skate. Space remains an alternate right-foot push through Minecraft's jump binding. The server clears controls after 250 ms without a fresh client packet, removes player state on disconnect, and sends engine state to clients at no more than 20 updates per second per skater. Without the locally converted mesh, the client uses a simplified six-part retarget of the engine skeleton onto the Minecraft skin. The retail skater uses the engine's weighted skeleton, but detailed facial morphs and some hand/foot details remain unverified in Minecraft.
 
 ## Current validation boundary
 
