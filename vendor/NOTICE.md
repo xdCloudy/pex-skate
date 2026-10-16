@@ -33,6 +33,15 @@ used in an earlier prototype and is no longer a Cargo dependency; the current
 server links the SkateGM host tree above. Its upstream license is retained in
 `LICENSE-SKATE-ENGINE`.
 
+## Skate 3 asset converter
+
+`tools/skategm-exporter/` vendors the ISO-aware data converter from SkateGM at
+commit `ea59a34ab714498cbfb4ed9f22fb9a26ab07bd08`. It is GPL-3.0 and includes
+its upstream exporter README, the full `LICENSE-THIRD-PARTY.md`, component
+license files, and our `UPSTREAM.md` provenance note. PEX Skate adds the
+Windows picker/install scripts under `tools/`; the portable Windows release
+converter is built from the vendored source at release time.
+
 ## Game content
 
 No Skate 3 game code, assets, or converted data are included. The engine reads

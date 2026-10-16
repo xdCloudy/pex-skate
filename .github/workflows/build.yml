@@ -44,14 +44,53 @@ jobs:
           client_jar=$(find client/build/libs -maxdepth 1 -type f -name 'pex-skate-client-*.jar' ! -name '*-sources.jar' -print -quit)
           test -n "$client_jar"
           cp "$client_jar" dist/pex-skate-client-26.3.jar
+          cp release/INSTALL.md dist/INSTALL.md
           sha256sum dist/pex-skate.wasm dist/pex-skate-client-26.3.jar > dist/SHA256SUMS
+          (cd dist && zip -j PEX-Skate-26.3.zip pex-skate.wasm pex-skate-client-26.3.jar SHA256SUMS INSTALL.md)
+          (cd dist && sha256sum --check SHA256SUMS)
+          test "$(unzip -Z1 dist/PEX-Skate-26.3.zip | sort | tr '\n' ' ')" = "INSTALL.md SHA256SUMS pex-skate-client-26.3.jar pex-skate.wasm "
       - uses: actions/upload-artifact@v7
         with:
           name: pex-skate-26.3
           path: dist/*
+  windows-data-setup:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install converter build requirements
+        run: python -m pip install -r tools/skategm-exporter/tools/requirements-setup.txt
+      - name: Build portable Skate 3 ISO converter
+        shell: pwsh
+        run: ./tools/skategm-exporter/build.ps1 -Out "$env:GITHUB_WORKSPACE\setup-build"
+      - name: Package ISO setup helper
+        shell: pwsh
+        run: |
+          $package = Join-Path $env:GITHUB_WORKSPACE "setup-package"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item "$env:GITHUB_WORKSPACE\setup-build\skategm-convert.exe" $package
+          Copy-Item tools/Install-PEXSkateData.ps1 $package
+          Copy-Item tools/Install-PEXSkateData.bat $package
+          Copy-Item LICENSE $package
+          Copy-Item tools/skategm-exporter/LICENSE-THIRD-PARTY.md $package
+          Copy-Item tools/skategm-exporter/UPSTREAM.md $package
+          Compress-Archive -Path tools/skategm-exporter/* -DestinationPath (Join-Path $package "skategm-exporter-source.zip")
+          $hashes = @("skategm-convert.exe", "skategm-exporter-source.zip") | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath (Join-Path $package $_) -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $_"
+          }
+          Set-Content -LiteralPath (Join-Path $package "SHA256SUMS") -Value $hashes -Encoding ascii
+          Compress-Archive -Path "$package\*" -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "PEX-Skate-ISO-Setup-Windows.zip")
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pex-skate-iso-setup-windows
+          path: PEX-Skate-ISO-Setup-Windows.zip
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, windows-data-setup]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -59,6 +98,10 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: pex-skate-26.3
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: pex-skate-iso-setup-windows
           path: dist
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3

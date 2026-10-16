@@ -1,0 +1,21 @@
+# PEX Skate 26.3 installation
+
+This bundle contains a server component and a client companion. Install both for the full skating experience.
+
+## Server
+
+1. Install the PEX/Pumpkin server version listed in the project README.
+2. Copy `pex-skate.wasm` into the server's configured plugin directory.
+3. Start the server once so PEX creates the plugin data directory.
+4. Download and extract the separate `PEX-Skate-ISO-Setup-Windows.zip` asset from the GitHub release. Run `Install-PEXSkateData.bat`, select your legally obtained Skate 3 Xbox 360 ISO, and select `<server>/plugins/data/pex-skate/`. The local converter validates the generated files and installs `private/` directly in that data folder, as expected by the engine. It does not upload or bundle game data. The setup ZIP includes the converter's corresponding source and license notices.
+5. Restart the server and check its log for plugin load errors.
+
+## Client
+
+Install Fabric Loader, Fabric API, and `pex-skate-client-26.3.jar` on each Java Edition client. The client version must match the Minecraft version in the filename.
+
+## Play
+
+Join the server and press **G** to toggle Skate mode. Use **W** or **Space** to push, **Shift** for a left-foot push, **S** to brake, **A/D** to steer, and the arrow keys for trick flicks. Standard mapped gamepads use **A** for right-foot push, **X** for left-foot push, **B** to brake, the left stick for movement/steering, and the right stick for trick flicks. Press **G** again to exit. See the repository README for the full keyboard/gamepad mapping and unsupported SkateGM controls.
+
+Verify downloaded files with `SHA256SUMS`. Gameplay remains experimental and requires user-provided converted game data; see the project README for the validation boundary and known limitations.

@@ -18,7 +18,7 @@ The PEX plugin API/WIT and the SkateGM engine/data/host crates are vendored at p
 - A Java Edition Minecraft 26.3 client with Fabric Loader 0.19.5+, Fabric API 0.162.0+26.3, and Java 25+.
 - Rust stable with the `wasm32-wasip2` target to build the server plugin.
 - JDK 25+ to build the client jar.
-- A legally obtained Skate 3 Xbox 360 copy, converted on your own machine to the SkateGM asset layout. No game files are supplied here.
+- A legally obtained Skate 3 Xbox 360 ISO if you plan to use the skating engine. The release's Windows helper converts it locally; no game files are supplied here.
 
 Vanilla and Bedrock clients can join the server, but cannot use Skate mode. This first build targets Java/Fabric clients only.
 
@@ -30,27 +30,68 @@ cargo test --locked
 ./build.ps1
 ```
 
-`build.ps1` creates both distributables and a SHA-256 checksum manifest under `dist/`:
+`build.ps1` creates the server/client files and a SHA-256 checksum manifest under `dist/`:
 
+- `PEX-Skate-26.3.zip` — portable bundle with both mods, install guide, and checksums
 - `pex-skate.wasm` — portable PEX plugin component
 - `pex-skate-client-26.3.jar` — client-side Fabric companion
+- `INSTALL.md` — quick install steps for the bundled files
 - `SHA256SUMS` — checksums for both files
+
+GitHub releases also include `PEX-Skate-ISO-Setup-Windows.zip`, with the portable ISO converter and picker-based data installer. CI builds it from the vendored source. To build the converter locally, use Python 3.13+, Rust, and the pinned requirements in `tools/skategm-exporter/tools/requirements-setup.txt`, then run `tools/skategm-exporter/build.ps1 -Out <folder>`.
 
 To build only the Fabric companion, run `client/gradlew.bat build` from the repository root. The jar is in `client/build/libs/`.
 
 ## Skate 3 data setup
 
-The engine needs converted game data at the PEX plugin's data folder, normally `plugins/data/pex-skate/`. Convert your own Skate 3 copy with the asset conversion workflow documented by [SkateGM](https://github.com/the-schwilliam/SkateGM), then copy the resulting `assets` directory contents into that PEX folder. At minimum, the root must contain `private/game.json`, `private/stock/skater-collections.json`, and `private/stock/data/config/input.cfg`; the engine will report any additional missing files during `/skate` startup. Do not upload converted files to GitHub or include them in a server release. Keep the files readable by the PEX process.
+### One-click ISO conversion on Windows
+
+1. Download and extract `PEX-Skate-ISO-Setup-Windows.zip` from the [GitHub releases](https://github.com/xdCloudy/pex-skate/releases).
+2. Run `Install-PEXSkateData.bat`. Select your legally obtained Skate 3 Xbox 360 `.iso`, then select the PEX Skate plugin data folder. The normal folder is `<server>/plugins/data/pex-skate/`; start PEX once first so its plugin folders exist.
+3. The bundled converter reads only the files it needs from the ISO, converts them on your PC, checks for required output files, then installs the generated `private/` asset tree. If converted assets already exist, it asks before replacing them. It keeps other files in the selected folder and writes `conversion.log` for troubleshooting.
+4. Restart the server. The plugin data root should now include `private/game.json`, `private/stock/skater-collections.json`, `private/stock/data/config/input.cfg`, and `private/skater.glb`. `/skate` reports a readable error if required data is missing.
+
+The ISO, extracted temporary files, and converted game data stay on your machine. Nothing is uploaded or included in GitHub releases. The setup tool is based on [SkateGM's ISO-aware exporter](https://github.com/the-schwilliam/SkateGM), pinned and licensed in `tools/skategm-exporter/`; its standalone `.exe` runs without a separate Python installation. The release setup ZIP includes the corresponding exporter source. This setup currently targets Windows; Linux/macOS users can follow `tools/skategm-exporter/README.md` and install its Python requirements.
+
+The converter reads `default.xex`, animation files, `miscload.big`, `miscboot.big`, `db.big`, and `createacharacter.big` directly from the ISO; it also reads the trick-display archives when present. It converts the gameplay graphs/input settings, animation banks, physics skeleton, skater collections, and default skater model used by the engine. It does not install Skate 3 maps, music, or sounds. The helper needs access to the PEX data folder: run it on the server machine, use a mounted server directory, or copy the generated `private/` folder to a remote server after conversion.
 
 ## Install and use
 
-1. Copy your converted Skate 3 data into `plugins/data/pex-skate/` as described above.
+1. Convert your Skate 3 ISO directly into `plugins/data/pex-skate/` as described above. On other platforms, use the vendored source exporter.
 2. Put `dist/pex-skate.wasm` in the plugin directory configured by PEX and start the server.
 3. Install the Fabric client jar and Fabric API on every player client.
 4. Join the server and press **G** to toggle Skate mode on the client and server. Press **G** again to turn it off.
-5. Use **W** or **Space** for a right-foot push, **Shift** for a left-foot push, **S** to brake, and **A/D** to steer. The arrow keys are the right-stick Flick-It directions; customize them under Controls → PEX Skate. Skate 3's engine turns those stick flicks into trick and pop logic.
+5. Use **W** or **Space** for a right-foot push, **Shift** for a left-foot push, **S** to brake, and **A/D** to steer. The arrow keys are the right-stick Flick-It directions; customize them under Controls → PEX Skate. A standard mapped gamepad uses **A/X/B** for right-foot push/left-foot push/brake, the left stick for pumping/steering, and the right stick for tricks.
 
 The server command `/skate` is also available for server-side toggling. The default camera is switched to third-person while the client mode is active.
+
+## Controls
+
+PEX Skate uses Skate 3's push, brake, steering, and Flick-It trick inputs. Keyboard mappings follow [SkateGM's documented keyboard layout](https://github.com/the-schwilliam/SkateGM#keyboard) where the PEX port supports the action. A standard gamepad recognized by GLFW is polled directly; for non-Xbox controllers, use a mapping/remapper that exposes a standard gamepad layout.
+
+| Action | Keyboard | Standard gamepad | PEX Skate status |
+| --- | --- | --- | --- |
+| Toggle Skate mode | G | — | Supported |
+| Right-foot push | W or Space | A | Supported |
+| Left-foot push | Shift | X | Supported |
+| Brake | S | B | Supported |
+| Steer | A / D | Left stick X | Supported |
+| Pump/forward axis | — | Left stick Y | Supported |
+| Flick-It tricks | Arrow keys | Right stick | Supported |
+| Grab | Q / E | — | Not implemented in PEX Skate |
+| Get on/off board | F | — | Not implemented in PEX Skate |
+| Interact | C | — | Not implemented in PEX Skate |
+| D-pad | I / K / U / O | D-pad | Not implemented in PEX Skate |
+| Menu / start / back | Z / Enter / Backspace | SkateGM menu controls | Not implemented in PEX Skate |
+| Respawn / exit free camera | R / L | LB + X respawns | Not implemented in PEX Skate |
+| Rocket board / use item | Ctrl / Alt | Right-stick click / left-stick click | Not implemented in PEX Skate |
+| Set/return to marker | — | LB + D-pad down / up (hold up to return) | Not implemented in PEX Skate |
+| Minigame host/join | — | LB + D-pad left | Not implemented in PEX Skate |
+| Spectate / teleport / accept invite | — | LB + D-pad right | Not implemented in PEX Skate |
+| Skate 3 music | Z + Ctrl/arrows | LB + right stick | Not implemented in PEX Skate |
+| Settings / map / park editor / replays | — | LB + A / Y / B / RB | Not implemented in PEX Skate |
+
+The Minecraft port currently wires only toggle, pushes, brake, steering/pumping, and Flick-It trick axes into the simulation. The additional rows document SkateGM's keyboard/controller layout; their menus, grabs, dismount, interaction, respawn, items, maps, and minigames are not part of this PEX mod yet. The controller mapping uses the first connected device that GLFW recognizes as a standard gamepad.
 
 ## Protocol
 
@@ -64,4 +105,4 @@ The Rust unit suite, WebAssembly component build, Fabric client build, and local
 
 ## License and credits
 
-PEX Skate is GPL-3.0-only. The server API comes from [PEX](https://github.com/Conman1533/PEX). The linked SkateGM engine host is Apache-2.0 and retains its upstream notices. No EA source code or proprietary game assets are included. See [LICENSE](LICENSE) and [vendor/NOTICE.md](vendor/NOTICE.md).
+PEX Skate is GPL-3.0-only. The server API comes from [PEX](https://github.com/Conman1533/PEX). The linked SkateGM engine host is Apache-2.0 and retains its upstream notices. SkateGM's GPL-3.0 exporter and third-party notices are vendored in `tools/skategm-exporter/`. No EA source code or proprietary game assets are included. See [LICENSE](LICENSE) and [vendor/NOTICE.md](vendor/NOTICE.md).

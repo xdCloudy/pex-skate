@@ -1,0 +1,189 @@
+import json
+import shutil
+import struct
+import sys
+from pathlib import Path
+
+from . import EXPORTER, MAP_TOOLS, UTT
+
+CACHE_FORMAT = 'skategm-mapgen-2'
+EMPTY_ATOC = b'ATOC' + struct.pack('>I', 3) + bytes(16)
+
+
+def _imports():
+    for path in (EXPORTER, MAP_TOOLS):
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+
+
+AHEAD = 16
+
+
+def _worker_init(paths):
+    for path in paths:
+        if path not in sys.path:
+            sys.path.insert(0, path)
+
+
+# (the vendored parser turns any decode error - a MemoryError too - into a
+# warning and drops the texture: on a PC short of memory a texture went
+# missing and its map differed from everyone else's. A failed decode is
+# tried again, and if it keeps failing the build stops)
+def _parse_texture(data):
+    import gc
+    import rx2_parser
+    warnings = []
+    for _ in range(3):
+        parsed = rx2_parser.parse_rx2(data)
+        warnings = [w for w in getattr(parsed, 'warnings', []) if 'decode failed' in w]
+        if not warnings:
+            return parsed
+        gc.collect()
+    raise RuntimeError('a texture would not decode: ' + '; '.join(warnings))
+
+
+def _parse_collision(data):
+    from retail_collision_mesh import decode_rx2_clustered_meshes
+    return decode_rx2_clustered_meshes(data)
+
+
+class Ahead:
+    def __init__(self, pool, fn, items):
+        self.pool, self.fn, self.items = pool, fn, list(items)
+        self.next, self.pending = 0, {}
+
+    def _fill(self):
+        while self.next < len(self.items) and len(self.pending) < AHEAD:
+            data = self.items[self.next]
+            self.pending.setdefault(id(data), []).append(self.pool.submit(self.fn, data))
+            self.next += 1
+
+    def get(self, data, fallback):
+        self._fill()
+        queue = self.pending.get(id(data))
+        if not queue:
+            return fallback(data)
+        future = queue.pop(0)
+        if not queue:
+            del self.pending[id(data)]
+        try:
+            result = future.result()
+        except Exception:
+            result = self.fn(data)
+        self._fill()
+        return result
+
+
+def _parse_texture_with(parse, data):
+    for _ in range(3):
+        parsed = parse(data)
+        if not any('decode failed' in w for w in getattr(parsed, 'warnings', [])):
+            return parsed
+    raise RuntimeError('a texture would not decode: ' + '; '.join(parsed.warnings))
+
+
+def _parallel_prepare(prepare, folder, stream, workers, **kwargs):
+    import os
+    from concurrent.futures import ProcessPoolExecutor
+    import prepare_hawaiian_dream as phd
+    import rx2_parser
+    from skate3_streams import load_district_stream
+    names = ['Pres', 'Sim'] + list(kwargs.get('texture_stream_names', ()))
+    assets = {name: load_district_stream(folder, name, kwargs['district_name']) for name in names}
+    textures = [a.data for name in names if name != 'Sim' for a in assets[name] if a.record.asset_type == phd.ASSET_TYPE_TEXTURE]
+    sims = [a.data for a in assets['Sim']]
+    real_load, real_parse, real_collision = phd.load_district_stream, rx2_parser.parse_rx2, phd.decode_rx2_clustered_meshes
+    real_write = phd._write_rx2
+    keep_models = kwargs.pop('keep_models', False)
+    if keep_models:
+        phd._write_rx2 = lambda root, category, asset, write=True: real_write(root, category, asset, write=write or category == 'models')
+    with ProcessPoolExecutor(max_workers=workers or os.cpu_count(), initializer=_worker_init, initargs=(list(sys.path),)) as pool:
+        tex, col = Ahead(pool, _parse_texture, textures), Ahead(pool, _parse_collision, sims)
+        phd.load_district_stream = lambda directory, name, district: assets[name] if name in assets else real_load(directory, name, district)
+        rx2_parser.parse_rx2 = lambda data: tex.get(data, lambda d: _parse_texture_with(real_parse, d))
+        phd.decode_rx2_clustered_meshes = lambda data: col.get(data, real_collision)
+        try:
+            return prepare(**kwargs)
+        finally:
+            phd.load_district_stream, rx2_parser.parse_rx2, phd.decode_rx2_clustered_meshes = real_load, real_parse, real_collision
+            phd._write_rx2 = real_write
+
+
+def decode_stream(source, archive_path, stream, work, report=print, workers=None):
+    _imports()
+    from .archives import open_archive as BigArchive
+    from prepare_hawaiian_dream import prepare
+    import importlib
+    decoder = importlib.import_module(source.game.decoder)
+    out = Path(work) / stream
+    manifest = out / 'intermediate/manifest.json'
+    stamp = out / 'mapgen.json'
+    archive = source.file(archive_path, report)
+    key = {'format': CACHE_FORMAT, 'archive': archive.name, 'size': archive.stat().st_size,
+           'channels': bool(source.game.lightmap_channels)}
+    if manifest.is_file() and stamp.is_file() and json.loads(stamp.read_text()) == key:
+        return manifest.parent
+    if out.exists():
+        shutil.rmtree(out)
+    report(f'reading {archive.name}')
+    big = BigArchive(archive)
+    big.extract_entries(big.entries, out / 'raw')
+    folder = out / 'raw/data/content/world/stream' / stream
+    if not folder.is_dir():
+        raise RuntimeError('missing stream ' + str(folder))
+    sim = folder / f'{stream}_Sim.xst'
+    if not sim.is_file():
+        sim.write_bytes(EMPTY_ATOC)
+    report(f'decoding {stream}')
+    if str(UTT) not in sys.path:
+        sys.path.insert(0, str(UTT))
+    _parallel_prepare(prepare, folder, stream, workers, stream_directory=folder, output_root=out / 'intermediate', utt_root=UTT,
+            district_name=stream, map_name=stream, package_name=source.game.title,
+            cache_format='skate3-rust-map-v1',
+            texture_stream_names=('Tex',) if any(folder.glob('cTex_*.xsf')) else (),
+            excluded_normal_texture_ids=getattr(decoder, 'EXCLUDED_NORMAL_TEXTURE_IDS', ()), raw_texture_cache=True,
+            excluded_static_model_asset_ids=getattr(decoder, 'EXCLUDED_STATIC_MODEL_ASSET_IDS', ()),
+            write_render_sources=False, keep_models=bool(source.game.lightmap_channels), **source.game.decode_options)
+    if source.game.lightmap_channels:
+        lightmap_channels(out / 'intermediate', report)
+    stamp.write_text(json.dumps(key))
+    return manifest.parent
+
+
+CHANNELS_FILE = 'lightmap_channels.json'
+
+
+def lightmap_channels(root, report=print):
+    from build_skate2_lightmap_aliases import _raw_lightmap_groups
+    root = Path(root)
+    manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+    out = {}
+    for model in manifest['models']:
+        asset = str(model['asset_id']).lower()
+        path = root / 'rx2' / 'models' / f'{asset[2:].upper()}.rx2'
+        if not path.is_file():
+            continue
+        try:
+            groups = _raw_lightmap_groups(path.read_bytes())
+        except ValueError:
+            continue
+        for mesh in model['meshes']:
+            g = int(mesh.get('retail_material_group_index', -1))
+            if 0 <= g < len(groups) and 'lightmap_component' in groups[g]:
+                out[f'{asset}:{int(mesh["index"])}'] = int(groups[g]['lightmap_component'])
+    (root / CHANNELS_FILE).write_text(json.dumps(out), encoding='utf-8')
+    shutil.rmtree(root / 'rx2' / 'models', ignore_errors=True)
+    report(f'{len(out)} lightmap channels read from the models')
+    return out
+
+
+def decode(source, district, work, report=print, workers=None):
+    stream = source.game.stream(district)
+    return decode_stream(source, stream.archive, stream.name, work, report, workers)
+
+
+def decode_proxy(source, district, work, report=print, workers=None):
+    stream = source.game.proxy(district)
+    if stream is None:
+        return None
+    return decode_stream(source, stream.archive, stream.name, work, report, workers)

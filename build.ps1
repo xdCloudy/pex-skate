@@ -5,6 +5,18 @@ $targetDir = Join-Path $repoRoot "target\wasm32-wasip2\release"
 $outputDir = Join-Path $repoRoot "dist"
 $componentPath = Join-Path $targetDir "pex_skate.wasm"
 
+$javaCommand = Get-Command java -ErrorAction SilentlyContinue
+if (-not $javaCommand) {
+    throw "Java 25 or newer is required to build the Fabric client companion."
+}
+$javaVersionOutput = (& java -version 2>&1 | Out-String)
+if ($javaVersionOutput -notmatch 'version "(\d+)(?:\.|")') {
+    throw "Could not determine the Java version from: $javaVersionOutput"
+}
+if ([int]$Matches[1] -lt 25) {
+    throw "Java 25 or newer is required to build the Fabric client companion. Detected Java $($Matches[1]). Set JAVA_HOME to a JDK 25+ installation."
+}
+
 Push-Location $repoRoot
 try {
     cargo build --locked --release --target wasm32-wasip2
@@ -13,10 +25,6 @@ try {
     New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
     Copy-Item -LiteralPath $componentPath -Destination (Join-Path $outputDir "pex-skate.wasm") -Force
 
-    $javaCommand = Get-Command java -ErrorAction SilentlyContinue
-    if (-not $javaCommand) {
-        throw "Java 25 or newer is required to build the Fabric client companion."
-    }
     Push-Location (Join-Path $repoRoot "client")
     try {
         .\gradlew.bat build
@@ -36,8 +44,36 @@ try {
         "$hash  $([System.IO.Path]::GetFileName($file))"
     }
     Set-Content -LiteralPath (Join-Path $outputDir "SHA256SUMS") -Value $checksums -Encoding ascii
+
+    Copy-Item -LiteralPath (Join-Path $repoRoot "release\INSTALL.md") -Destination (Join-Path $outputDir "INSTALL.md") -Force
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $bundlePath = Join-Path $outputDir "PEX-Skate-26.3.zip"
+    if (Test-Path -LiteralPath $bundlePath) { Remove-Item -LiteralPath $bundlePath -Force }
+    $archive = [System.IO.Compression.ZipFile]::Open($bundlePath, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($fileName in @("pex-skate.wasm", "pex-skate-client-26.3.jar", "SHA256SUMS", "INSTALL.md")) {
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $archive,
+                (Join-Path $outputDir $fileName),
+                $fileName,
+                [System.IO.Compression.CompressionLevel]::Optimal
+            ) | Out-Null
+        }
+    } finally {
+        $archive.Dispose()
+    }
+    $expectedEntries = @("pex-skate.wasm", "pex-skate-client-26.3.jar", "SHA256SUMS", "INSTALL.md") | Sort-Object
+    $checkArchive = [System.IO.Compression.ZipFile]::OpenRead($bundlePath)
+    try {
+        $actualEntries = @($checkArchive.Entries | ForEach-Object FullName | Sort-Object)
+    } finally {
+        $checkArchive.Dispose()
+    }
+    if (Compare-Object $expectedEntries $actualEntries) {
+        throw "Portable bundle is missing files or contains unexpected paths."
+    }
 } finally {
     Pop-Location
 }
 
-Write-Host "PEX plugin and Fabric client companion written to dist\"
+Write-Host "PEX Skate release files written to dist\"

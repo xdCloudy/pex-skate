@@ -1,6 +1,9 @@
 package dev.pexskate.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.math.Transformation;
+import org.lwjgl.glfw.GLFW;
+import org.lwjgl.glfw.GLFWGamepadState;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -38,6 +41,7 @@ public final class PexSkateClient implements ClientModInitializer {
 
     private boolean skating;
     private CameraType previousCamera;
+    private final GLFWGamepadState gamepadState = GLFWGamepadState.create();
     private static final Map<Integer, ItemDisplay> BOARDS = new HashMap<>();
     private static final Map<Integer, Long> LAST_SEEN = new HashMap<>();
     private static final Identifier BOARD_MODEL = Identifier.fromNamespaceAndPath("pexskate", "skateboard");
@@ -87,6 +91,8 @@ public final class PexSkateClient implements ClientModInitializer {
             if (board == null) return;
             board.setId(-1_000_000 - state.entityId());
             board.setNoGravity(true);
+            board.setTransformationInterpolationDuration(3);
+            board.setPosRotInterpolationDuration(3);
             ItemStack boardItem = new ItemStack(Items.OAK_PRESSURE_PLATE);
             boardItem.set(DataComponents.ITEM_MODEL, BOARD_MODEL);
             board.setItemStack(boardItem);
@@ -94,17 +100,20 @@ public final class PexSkateClient implements ClientModInitializer {
             BOARDS.put(state.entityId(), board);
         }
         board.setPos(state.boardPosX(), state.boardPosY() + 0.03, state.boardPosZ());
-        // Network order is x, y, z, w; entity yaw/pitch provide the closest
-        // vanilla ItemDisplay orientation while preserving the full pose for
-        // clients that replace the display renderer.
+        // Apply the complete engine orientation so flips and board roll survive
+        // the server/client bridge instead of collapsing to yaw and pitch.
         float bx = state.boardRotX();
         float by = state.boardRotY();
         float bz = state.boardRotZ();
         float bw = state.boardRotW();
-        float yaw = (float) Math.toDegrees(Math.atan2(2.0f * (bw * by + bx * bz), 1.0f - 2.0f * (by * by + bz * bz)));
-        float pitch = (float) Math.toDegrees(Math.asin(Math.clamp(2.0f * (bw * bx - bz * by), -1.0f, 1.0f)));
-        board.setYRot(yaw);
-        board.setXRot(pitch);
+        float rotationLength = (float) Math.sqrt(bx * bx + by * by + bz * bz + bw * bw);
+        if (Float.isFinite(rotationLength) && rotationLength > 1.0e-5f) {
+            board.setTransformation(new Transformation(
+                    new org.joml.Vector3f(),
+                    new org.joml.Quaternionf(bx, by, bz, bw).normalize(),
+                    new org.joml.Vector3f(1.0f),
+                    new org.joml.Quaternionf()));
+        }
         LAST_SEEN.put(state.entityId(), client.level.getGameTime());
 
         if (client.player != null && client.player.getId() == state.entityId()) {
@@ -151,19 +160,59 @@ public final class PexSkateClient implements ClientModInitializer {
         }
         clearStaleBoards(client);
 
+        Gamepad pad = readGamepad();
         int flags = 0;
-        if (client.options.keySprint.isDown() || client.options.keyUp.isDown() || client.options.keyJump.isDown()) flags |= 1;
-        if (client.options.keyShift.isDown()) flags |= 2;
-        if (client.options.keyDown.isDown()) flags |= 4;
+        if (client.options.keySprint.isDown() || client.options.keyUp.isDown() || client.options.keyJump.isDown()
+                || pad.pushRight()) flags |= 1;
+        if (client.options.keyShift.isDown() || pad.pushLeft()) flags |= 2;
+        if (client.options.keyDown.isDown() || pad.brake()) flags |= 4;
 
-        int forward = 0;
-        int steer = (client.options.keyRight.isDown() ? 127 : 0)
-                - (client.options.keyLeft.isDown() ? 127 : 0);
-        int rightX = (FLICK_RIGHT.isDown() ? 127 : 0) - (FLICK_LEFT.isDown() ? 127 : 0);
-        int rightY = (FLICK_UP.isDown() ? 127 : 0) - (FLICK_DOWN.isDown() ? 127 : 0);
+        float steer = clamp(keyAxis(client.options.keyRight.isDown(), client.options.keyLeft.isDown()) + pad.leftX());
+        float rightX = clamp(keyAxis(FLICK_RIGHT.isDown(), FLICK_LEFT.isDown()) + pad.rightX());
+        float rightY = clamp(keyAxis(FLICK_UP.isDown(), FLICK_DOWN.isDown()) + pad.rightY());
 
         ClientPlayNetworking.send(new ControlPayload(
-                (byte) 2, (byte) flags, (byte) forward, (byte) steer, (byte) rightX, (byte) rightY));
+                (byte) 2, (byte) flags, quantize(pad.forward()), quantize(steer), quantize(rightX), quantize(rightY)));
+    }
+
+    private Gamepad readGamepad() {
+        for (int joystick = GLFW.GLFW_JOYSTICK_1; joystick <= GLFW.GLFW_JOYSTICK_LAST; joystick++) {
+            if (GLFW.glfwJoystickPresent(joystick) && GLFW.glfwJoystickIsGamepad(joystick)
+                    && GLFW.glfwGetGamepadState(joystick, gamepadState)) {
+                return new Gamepad(
+                        deadzone(gamepadState.axes(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X)),
+                        -deadzone(gamepadState.axes(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y)),
+                        deadzone(gamepadState.axes(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_X)),
+                        -deadzone(gamepadState.axes(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y)),
+                        gamepadState.buttons(GLFW.GLFW_GAMEPAD_BUTTON_A) == GLFW.GLFW_PRESS,
+                        gamepadState.buttons(GLFW.GLFW_GAMEPAD_BUTTON_X) == GLFW.GLFW_PRESS,
+                        gamepadState.buttons(GLFW.GLFW_GAMEPAD_BUTTON_B) == GLFW.GLFW_PRESS);
+            }
+        }
+        return Gamepad.NONE;
+    }
+
+    private static float keyAxis(boolean positive, boolean negative) {
+        return (positive ? 1.0f : 0.0f) - (negative ? 1.0f : 0.0f);
+    }
+
+    private static float deadzone(float value) {
+        float magnitude = Math.abs(value);
+        if (!Float.isFinite(value) || magnitude <= 0.15f) return 0.0f;
+        return Math.copySign(Math.min(1.0f, (magnitude - 0.15f) / 0.85f), value);
+    }
+
+    private static float clamp(float value) {
+        return Math.clamp(value, -1.0f, 1.0f);
+    }
+
+    private static byte quantize(float value) {
+        return (byte) Math.round(clamp(value) * 127.0f);
+    }
+
+    private record Gamepad(float leftX, float forward, float rightX, float rightY,
+                           boolean pushRight, boolean pushLeft, boolean brake) {
+        private static final Gamepad NONE = new Gamepad(0.0f, 0.0f, 0.0f, 0.0f, false, false, false);
     }
 
     private static void clearStaleBoards(Minecraft client) {
