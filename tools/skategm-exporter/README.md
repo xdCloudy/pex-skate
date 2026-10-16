@@ -9,13 +9,13 @@ retail sky dome when its source assets resolve.
 
 Resolved DMO placements also produce `assets/private/native-props/<Map>.skate`
 for client rendering and an `<Map>.instances` collision sidecar in the same
-directory. The `PEXCOL3` sidecar stores each
-instance ID, its authored transform, and its local opaque-mesh triangles; the
-server expands these into the initial collision layer. It preserves instance
-boundaries for a future movement protocol, but the current runtime does not
-simulate prop movement or impact response. `<Map>.collision` remains as a
-bounded compatibility/fallback package. `maps.json` records and hashes each
-available package.
+directory. The `PEXCOL3` sidecar stores each instance ID, its authored transform,
+and its local opaque-mesh triangles; the server expands these into the initial
+collision layer. The server can move matching instances after swept board
+impacts, with bounded translation and yaw around each collision pivot; motion
+damps over time. The current runtime does not simulate authored prop mass or
+hinged doors. `<Map>.collision` remains as a bounded compatibility/fallback
+package. `maps.json` records and hashes each available package.
 
 The ISO mode reads the required files and `data/content/worldDIST_*.big` map
 archives from the disc image into a temporary folder, converts them, then removes

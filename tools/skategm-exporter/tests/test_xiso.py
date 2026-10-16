@@ -5,13 +5,29 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from xiso import DIRECTORY, MAGIC, SECTOR, Xiso, XisoError, extract_matching
+from xiso import DIRECTORY, MAGIC, SECTOR, Xiso, XisoError, extract_files, extract_matching
 
 
 def make_entry(name, sector, size, attributes=0):
     encoded = name.encode("latin-1")
     record = struct.pack("<HHIIBB", 0, 0, sector, size, attributes, len(encoded)) + encoded
     return record + bytes((-len(record)) % 4)
+
+
+def make_directory(entries):
+    """Build a directory's linked entry tree from (name, sector, size, attrs)."""
+    offsets = []
+    cursor = 0
+    for name, *_ in entries:
+        offsets.append(cursor)
+        cursor += (14 + len(name.encode("latin-1")) + 3) & ~3
+    records = []
+    for index, (name, sector, size, attributes) in enumerate(entries):
+        right = offsets[index + 1] // 4 if index + 1 < len(entries) else 0
+        encoded = name.encode("latin-1")
+        record = struct.pack("<HHIIBB", 0, right, sector, size, attributes, len(encoded)) + encoded
+        records.append(record + bytes((-len(record)) % 4))
+    return b"".join(records)
 
 
 class XisoTests(unittest.TestCase):
@@ -35,6 +51,46 @@ class XisoTests(unittest.TestCase):
         if root_start + len(root) <= len(image):
             image[root_start:root_start + len(root)] = root
         image[41 * SECTOR:41 * SECTOR + len(file_data)] = file_data
+        self.image_path.write_bytes(image)
+
+    def write_skate_data_tree(self):
+        image = bytearray(64 * SECTOR)
+        root_sector = 40
+        big = make_directory([
+                ("miscload.big", 50, 3, 0),
+                ("miscboot.big", 51, 3, 0),
+                ("db.big", 52, 3, 0),
+            ])
+        anim = make_directory([("skater.abk", 53, 4, 0)])
+        content = make_directory([
+                ("createacharacter.big", 54, 3, 0),
+                ("worldDIST_University.big", 55, 4, 0),
+                ("worldDIST_Industrial.big", 56, 4, 0),
+                ("unrelated.bin", 57, 3, 0),
+            ])
+        directories = {
+            41: make_directory([
+                ("big", 42, len(big), DIRECTORY),
+                ("anim", 43, len(anim), DIRECTORY),
+                ("content", 44, len(content), DIRECTORY),
+            ]),
+            42: big,
+            43: anim,
+            44: content,
+        }
+        root = make_directory([("data", 41, len(directories[41]), DIRECTORY)])
+        descriptor = MAGIC + struct.pack("<II", root_sector, len(root)) + bytes(8)
+        image[32 * SECTOR:32 * SECTOR + len(descriptor)] = descriptor
+        image[root_sector * SECTOR:root_sector * SECTOR + len(root)] = root
+        for sector, directory in directories.items():
+            start = sector * SECTOR
+            image[start:start + len(directory)] = directory
+        for sector, content in {
+            50: b"load", 51: b"boot", 52: b"db!", 53: b"anim",
+            54: b"cac", 55: b"univ", 56: b"indu", 57: b"no!",
+        }.items():
+            start = sector * SECTOR
+            image[start:start + len(content)] = content
         self.image_path.write_bytes(image)
 
     def test_lists_and_extracts_a_file_from_a_valid_xdvdfs_image(self):
@@ -61,6 +117,34 @@ class XisoTests(unittest.TestCase):
         self.write_image([make_entry("readme.txt", 41, 5)])
         with self.assertRaisesRegex(XisoError, "no files matching"):
             extract_matching(self.image_path, "", "worldDIST_*.big", self.temp.name)
+
+    def test_disc_conversion_inputs_extract_only_required_paths_and_world_archives(self):
+        self.write_skate_data_tree()
+        output = Path(self.temp.name) / "disc"
+        files = extract_files(
+            self.image_path,
+            ["data/anim", "data/big/miscload.big", "data/big/miscboot.big", "data/big/db.big", "data/content/createacharacter.big"],
+            output,
+        )
+        maps = extract_matching(self.image_path, "data/content", "worldDIST_*.big", output)
+
+        self.assertEqual(
+            files,
+            [
+                "data/anim/skater.abk",
+                "data/big/miscload.big",
+                "data/big/miscboot.big",
+                "data/big/db.big",
+                "data/content/createacharacter.big",
+            ],
+        )
+        self.assertEqual(
+            maps,
+            ["data/content/worldDIST_Industrial.big", "data/content/worldDIST_University.big"],
+        )
+        self.assertEqual((output / "data/anim/skater.abk").read_bytes(), b"anim")
+        self.assertEqual((output / "data/content/worldDIST_University.big").read_bytes(), b"univ")
+        self.assertFalse((output / "data/content/unrelated.bin").exists())
 
     def test_rejects_path_traversal_names(self):
         self.write_image([make_entry("../outside", 41, 5)])
