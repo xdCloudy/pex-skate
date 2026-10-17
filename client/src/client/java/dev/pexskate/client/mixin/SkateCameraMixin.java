@@ -48,18 +48,17 @@ public abstract class SkateCameraMixin {
         if (pose == null) return;
 
         if (!SkateMapModel.hasActiveRetailMap(client.player.getId())) {
-            // Vanilla follows the network player entity, while the Skate model
-            // is drawn from the interpolated authoritative pose. Anchor the
-            // chase camera to that same pose so it cannot trail behind the
-            // skater while the two transforms differ.
-            float[] hipsPoint = pose.point(1);
-            if (hipsPoint == null) return;
-            Vec3 hips = new Vec3(hipsPoint[0], hipsPoint[1], hipsPoint[2]);
-            Vec3 lookAt = hips.add(0.0, 0.75, 0.0);
+            // Follow the exact root used by LivingEntityRenderer for this
+            // frame. Hip joints bob and shift during pushes and tricks, so
+            // anchoring to them makes the camera drift against the rendered
+            // player even though both are sampled from the same pose.
+            float[] root = pose.rootPosition();
+            Vec3 anchor = new Vec3(root[0], root[1], root[2]);
+            Vec3 lookAt = SkateCameraMath.minecraftChaseLookAt(anchor);
             // Board yaw can spin independently while the skater performs a
             // trick. Use the torso heading so the chase camera stays aligned
             // with the same character pose rendered this frame.
-            Vec3 target = SkateCameraMath.minecraftChasePosition(hips, pose.characterYaw());
+            Vec3 target = SkateCameraMath.minecraftChasePosition(anchor, pose.characterYaw());
 
             double segmentLength = lookAt.distanceTo(target);
             if (segmentLength > 1.0e-6) {
