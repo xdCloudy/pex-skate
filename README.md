@@ -78,7 +78,7 @@ The `--xex` argument accepts either the ISO or `default.xex` from an already ext
 ## Install and use
 
 1. Put `dist/pex-skate.wasm` in the plugin directory configured by PEX and start the server once to create the plugin data folder.
-2. Install the Fabric client jar and Fabric API on every player client.
+2. Install Fabric Loader, Fabric API, and the Fabric client jar on every player client. In CurseForge, open the profile folder and put `pex-skate-client-26.3.jar` directly in its `mods/` folder; do not import the jar with **Add Content**. Fully close and relaunch Minecraft after adding the jar so Fabric scans it at startup.
 3. Stop the server, convert the ISO into `plugins/data/pex-skate/` using the steps above, then restart the server.
 4. Join the server and press **G** to toggle Skate mode on the client and server. Press **G** again to turn it off.
 5. Use **W** or **Space** for a right-foot push, **Shift** for a left-foot push, **S** to brake, and **A/D** to steer. The arrow keys are the right-stick Flick-It directions; customize them under Controls → PEX Skate. A standard mapped gamepad uses **A/X/B** for right-foot push/left-foot push/brake, the left stick for pumping/steering, and the right stick for tricks.

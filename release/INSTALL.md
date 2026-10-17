@@ -16,6 +16,8 @@ Optional: set the Skate 3 physics mode for new sessions in `<server>/plugins/dat
 
 Install Fabric Loader, Fabric API, and `pex-skate-client-26.3.jar` on each Java Edition client. The client version must match the Minecraft version in the filename.
 
+For a CurseForge profile, open the profile's menu and choose **Open Folder**, then put `pex-skate-client-26.3.jar` directly in that profile's `mods/` folder beside `fabric-api-*.jar`. Do not use **Add Content** or **Import** for this standalone jar; those actions expect a CurseForge project or modpack. Fully close Minecraft and relaunch the profile so Fabric scans the new jar at startup. Every player needs the Fabric client mod, Fabric API, and their own copy of the converted map packages in `config/pex-skate/`.
+
 ## Play
 
 Join the server and press **G** to toggle Skate mode. Use **W** or **Space** to push, **Shift** for a left-foot push, **S** to brake, **A/D** to steer, **F** to get on/off the board, **Q/E** to grab, and the arrow keys for trick flicks. Standard mapped gamepads use **A** for right-foot push, **X** for left-foot push, **B** to brake, **Y** to get on/off the board, the left stick for movement/steering, and the right stick for trick flicks. Press **G** again to exit. See the repository README for the full keyboard/gamepad mapping and unsupported SkateGM controls.
