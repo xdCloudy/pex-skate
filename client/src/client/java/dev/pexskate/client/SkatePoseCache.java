@@ -200,13 +200,7 @@ public final class SkatePoseCache {
             };
         }
 
-        /**
-         * Sample a joint between snapshots and carry its observed motion forward
-         * with the same prediction interval used for the local render root. The
-         * GLB is positioned from these world-space joints, so leaving them at the
-         * last server sample made the skater appear to trail a camera whose root
-         * position was already being predicted.
-         */
+        /** Interpolate a point and extrapolate it using a caller-supplied fallback velocity. */
         static float[] predictPoint(float[] first, float[] second, float interpolation,
                                     float snapshotDeltaSeconds, float predictionSeconds,
                                     float[] fallbackVelocity) {

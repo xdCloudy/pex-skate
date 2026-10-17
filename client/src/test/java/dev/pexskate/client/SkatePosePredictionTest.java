@@ -104,6 +104,23 @@ final class SkatePosePredictionTest {
     }
 
     @Test
+    void remoteJointSamplingRemainsLinearBetweenSnapshots() {
+        float[] sampled = SkatePoseCache.Pose.predictRootRelativePoint(
+                new float[] {2.0f, 2.0f, 2.0f},
+                new float[] {10.0f, 4.0f, 2.0f},
+                new float[] {1.0f, 1.0f, 1.0f},
+                new float[] {9.0f, 3.0f, 1.0f},
+                new float[] {5.0f, 2.0f, 1.0f},
+                0.5f,
+                0.05f,
+                0.0f);
+
+        assertEquals(6.0f, sampled[0], 1.0e-5f);
+        assertEquals(3.0f, sampled[1], 1.0e-5f);
+        assertEquals(2.0f, sampled[2], 1.0e-5f);
+    }
+
+    @Test
     void localSkeletalAnchorPredictionUsesRootVelocityWithoutTwoSnapshots() {
         float[] predicted = SkatePoseCache.Pose.predictPoint(
                 new float[] {1.0f, 2.0f, 3.0f},
