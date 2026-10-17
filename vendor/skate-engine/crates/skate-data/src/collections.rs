@@ -1,6 +1,10 @@
 //! Typed access to converted stock skater XML values, without engine objects.
 use serde::Deserialize;
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    sync::OnceLock,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct Field {
@@ -24,11 +28,45 @@ pub struct Collection {
 pub struct Collections {
     version: u32,
     collections: Vec<Collection>,
+    #[serde(skip)]
+    index: OnceLock<CollectionsIndex>,
+}
+
+#[derive(Debug, Default)]
+struct CollectionsIndex {
+    identities: HashMap<(u64, u64), usize>,
+    fields: Vec<HashMap<u64, String>>,
 }
 
 impl Collections {
     pub fn entries(&self) -> &[Collection] {
         &self.collections
+    }
+
+    fn index(&self) -> &CollectionsIndex {
+        self.index.get_or_init(|| {
+            let mut index = CollectionsIndex {
+                identities: HashMap::with_capacity(self.collections.len()),
+                fields: Vec::with_capacity(self.collections.len()),
+            };
+            for (position, collection) in self.collections.iter().enumerate() {
+                index
+                    .identities
+                    .entry((
+                        crate::attrib_hash::numeric_id(&collection.class_name),
+                        crate::attrib_hash::numeric_id(&collection.key),
+                    ))
+                    .or_insert(position);
+                let mut fields = HashMap::with_capacity(collection.fields.len());
+                for name in collection.fields.keys() {
+                    fields
+                        .entry(crate::attrib_hash::numeric_id(name))
+                        .or_insert_with(|| name.clone());
+                }
+                index.fields.push(fields);
+            }
+            index
+        })
     }
 
     pub fn load(asset_root: &Path) -> Result<Self, String> {
@@ -43,7 +81,10 @@ impl Collections {
         }
         let mut identities = std::collections::BTreeSet::new();
         for item in &data.collections {
-            if !identities.insert((crate::attrib_hash::numeric_name(&item.class_name), crate::attrib_hash::numeric_name(&item.key))) {
+            if !identities.insert((
+                crate::attrib_hash::numeric_name(&item.class_name),
+                crate::attrib_hash::numeric_name(&item.key),
+            )) {
                 return Err(format!(
                     "Duplicate collection {}/{}",
                     item.class_name, item.key
@@ -56,23 +97,24 @@ impl Collections {
     pub fn field(&self, class: &str, key: &str, name: &str) -> Result<&Field, String> {
         // Converted vaults can retain numeric identities when debug names were
         // unavailable. Both spellings identify the same native AttribSys entry.
-        let class_id = crate::attrib_hash::numeric_name(class);
-        let field_id = crate::attrib_hash::numeric_name(name);
+        let class_id = crate::attrib_hash::numeric_id(class);
+        let field_id = crate::attrib_hash::numeric_id(name);
+        let index = self.index();
         let mut current = key;
         for _ in 0..=self.collections.len() {
-            let current_id = crate::attrib_hash::numeric_name(current);
-            let item = self
-                .collections
-                .iter()
-                .find(|c| {
-                    (c.class_name == class || crate::attrib_hash::numeric_name(&c.class_name) == class_id)
-                        && (c.key == current || crate::attrib_hash::numeric_name(&c.key) == current_id)
-                })
+            let current_id = crate::attrib_hash::numeric_id(current);
+            let item_index = index.identities.get(&(class_id, current_id)).copied();
+            let item = item_index
+                .map(|position| &self.collections[position])
                 .ok_or_else(|| format!("Missing stock collection {class}/{current}"))?;
-            if let Some(field) = item.fields.get(name).or_else(|| {
-                item.fields.iter().find(|(key, _)| crate::attrib_hash::numeric_name(key) == field_id)
-                    .map(|(_, field)| field)
-            }) {
+            let field_name = item_index
+                .and_then(|position| index.fields[position].get(&field_id))
+                .map(String::as_str);
+            if let Some(field) = item
+                .fields
+                .get(name)
+                .or_else(|| field_name.and_then(|key| item.fields.get(key)))
+            {
                 return Ok(field);
             }
             if item.parent.is_empty() {
@@ -161,7 +203,12 @@ mod tests {
                 "fields": { "Hash_A353CE1670D3AA40": { "type": "EA::Reflection::Float", "data": "3D23D70A" } }
             }]
         })).unwrap();
-        assert_eq!(data.float("anim_motion", "manual", "manual_clamp_vel").unwrap().to_bits(), 0x3d23d70a);
+        assert_eq!(
+            data.float("anim_motion", "manual", "manual_clamp_vel")
+                .unwrap()
+                .to_bits(),
+            0x3d23d70a
+        );
         assert!(data.field("anim_motion", "manual", "missing").is_err());
     }
 
@@ -175,7 +222,14 @@ mod tests {
                  "fields":{"value":{"type":"EA::Reflection::Float", "data":"3F800000"}}}
             ]
         })).unwrap();
-        assert_eq!(data.float(&crate::attrib_hash::numeric_name("example"),
-            &crate::attrib_hash::numeric_name("child"), &crate::attrib_hash::numeric_name("value")).unwrap(), 1.0);
+        assert_eq!(
+            data.float(
+                &crate::attrib_hash::numeric_name("example"),
+                &crate::attrib_hash::numeric_name("child"),
+                &crate::attrib_hash::numeric_name("value")
+            )
+            .unwrap(),
+            1.0
+        );
     }
 }

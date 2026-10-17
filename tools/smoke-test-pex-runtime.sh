@@ -175,6 +175,8 @@ run_server_smoke() {
       tail -n 12 server.log | cut -c1-1200
       return 1
     fi
+    echo "Skate data/session initialization timings:"
+    grep -E 'MAP_READ_TIMING|IW4L_SKATE_LOAD|SKATE_PHYSICS_MODE|SKATE_GRIND_READY|Can.t keep up' server.log | tail -n 60 || true
     python3 "$script_dir/check_pex_status.py"
     echo "PEX $server_version loaded ${map_name:-the default Skate map}, activated $smoke_players engine session(s), consumed client controls, and passed the status handshake."
   else
