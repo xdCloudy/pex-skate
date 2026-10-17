@@ -1,5 +1,43 @@
 Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by SkateGM's portable Rust simulation. This release includes a portable server/client bundle and a Windows helper that converts a Skate 3 Xbox 360 ISO supplied by the user. No game data is included.
 
+### 0.1.0-alpha.74
+
+- Give Space a dedicated PEX right-foot push binding and suppress Minecraft jump only while Skate mode is active, preventing a vanilla jump from competing with Skate physics.
+- Keep W and gamepad A as alternate right-foot push inputs; vanilla jump works normally outside Skate mode.
+- Add regression coverage and update the control table and install guide.
+
+### 0.1.0-alpha.73
+
+- Predict local skeletal joints relative to the same extrapolated simulation root used by the Minecraft-world chase camera and avatar renderer, preventing finite-difference joint velocity from pulling the retail skater model away during acceleration.
+- Add regression coverage for root-relative joint prediction under mismatched snapshot and velocity estimates.
+- Live camera and retail skater synchronization still needs validation in Minecraft; this remains an alpha build.
+
+### 0.1.0-alpha.72
+
+- Match the local skeletal prediction floor to the server's 50 ms pose broadcast interval to avoid overestimating motion when client packet tasks arrive together.
+- Update regression coverage for burst-arrival position and rotation predictions.
+- The camera change still needs live visual validation in Minecraft; this remains an alpha build.
+
+### 0.1.0-alpha.71
+
+- Correct shortest-arc quaternion prediction for local skeletal joints when equivalent quaternion signs differ.
+- Add a regression test for shortest-arc rotation prediction.
+- The camera change still needs live visual validation in Minecraft; this remains an alpha build.
+
+### 0.1.0-alpha.70
+
+- Bound local skeletal pose prediction to a minimum 25 ms sample interval so back-to-back client packet processing cannot amplify timing jitter into camera or skater jumps.
+- Add regression tests for close-arrival joint position and rotation snapshots.
+- The camera change still needs live visual validation in Minecraft; this remains an alpha build.
+
+### 0.1.0-alpha.69
+
+- Predict local skeletal joint positions and rotations between server snapshots using the same sampled pose as the chase camera. This keeps the visible skater's body heading and joint transforms moving in step with the predicted camera follow during turns and pushes.
+- Add regression coverage for joint position prediction, its single-snapshot velocity fallback, and skeletal rotation prediction.
+- The camera change still needs live visual validation in Minecraft; this remains an alpha build.
+
+### 0.1.0-alpha.68
+
 ### Fixes in this build
 
 - Index converted asset collection and field identities once instead of linearly searching the full collection list for every engine setting. On the same two-client converted-data smoke, the `IW4L_SKATE_LOAD skater` timing fell from 3.85/2.93 seconds to 0.43/0.30 seconds; the updated run emitted no server catch-up warning.
@@ -9,7 +47,8 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Pace the gameplay smoke inputs against server acknowledgements so delayed state packets cannot skip stock Ollie gesture points.
 - Strengthen the data-backed runtime smoke to verify movement and a recognized trick with simultaneous clients in Minecraft-world mode.
 - Apply the Skate chase camera after Minecraft's camera extraction so vanilla camera setup cannot overwrite the Skate-follow position; synchronize the final render pose, projection, and culling frustum.
-- Anchor Minecraft-world chase view to the interpolated Skate skeleton and test heading and look-at camera math.
+- Anchor Minecraft-world chase view and look-at point to the same sampled simulation root used by the rendered player, instead of following animated hip motion; add camera-math regression coverage. Live camera feel still needs in-game validation.
+- Prewarm up to four sessions for the selected retail district at plugin startup, with a `0`–`4` setting to trade startup memory/time for faster `/skate` activation. Additional players beyond the pool load sessions on demand.
 - Keep OPAQUE GLB materials opaque when source textures carry packed alpha data, preventing sparse or flickering skater and board meshes.
 - Decode each skater's interpolated joint positions and rotations once per render submission and reuse that snapshot across the GLB primitives.
 - Keep Minecraft-world mode as the default when no retail district is selected, and make the installer describe retail maps as optional.
@@ -59,4 +98,4 @@ See `INSTALL.md` in `PEX-Skate-26.3.zip`. Each player needs the Fabric client an
 
 ### Known limitations
 
-This is an alpha and is not production-ready. All 10 districts converted from the supplied Xbox 360 ISO have each passed a PEX runtime smoke test. A separate data-backed smoke drives movement and the stock Ollie gesture for two simultaneous clients in Minecraft-world mode. On the same local two-client run, indexed Skate data lookups reduced engine load timing from 3.85/2.93 seconds to 0.43/0.30 seconds, with no server catch-up warning in the updated run. Session construction is still synchronous, and performance varies by host. These checks do not validate Fabric rendering, camera feel, controller input, or long-distance gameplay in a real Minecraft client. Some authored DMO template IDs can be absent from the supplied archive and are reported/skipped. Board impacts can translate and yaw-rotate authored district props around a shared collision pivot, damp their motion, and synchronize transforms to clients; clients interpolate the received poses between snapshots. Authored mass and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions remain unimplemented.
+This is an alpha and is not production-ready. All 10 districts converted from the supplied Xbox 360 ISO have each passed a PEX runtime smoke test. A separate data-backed smoke drives movement and the stock Ollie gesture for two simultaneous clients in Minecraft-world mode. On the same local two-client run, indexed Skate data lookups reduced engine load timing from 3.85/2.93 seconds to 0.43/0.30 seconds, with no server catch-up warning in the updated run. A four-client University run consumed all four prewarmed sessions; startup took about 7.2 seconds and produced a one-time catch-up warning. Session creation is synchronous during startup prewarming, and players beyond the configured pool load a session on demand; memory and startup performance vary by host. These checks do not validate Fabric rendering, camera feel, controller input, or long-distance gameplay in a real Minecraft client. Some authored DMO template IDs can be absent from the supplied archive and are reported/skipped. Board impacts can translate and yaw-rotate authored district props around a shared collision pivot, damp their motion, and synchronize transforms to clients; clients interpolate the received poses between snapshots. Authored mass and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions remain unimplemented.

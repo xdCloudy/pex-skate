@@ -1,6 +1,7 @@
 {
   "key.pexskate.toggle": "Toggle Skate Mode",
   "key.pexskate.push_right": "Skate Push (Right Foot)",
+  "key.pexskate.push_right_space": "Skate Push (Right Foot, Space)",
   "key.pexskate.push_left": "Skate Push (Left Foot)",
   "key.pexskate.brake": "Skate Brake",
   "key.pexskate.steer_left": "Skate Steer Left",

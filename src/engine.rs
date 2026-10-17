@@ -5,7 +5,8 @@
 use crate::physics::Controls;
 use skate_data::skate_map::SkateMap;
 use skate_host::bridge::{self, Session};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::{fs, io::ErrorKind};
 
 const PROP_COLLISION_BOX_MAGIC: &[u8; 8] = b"PEXCOL1\0";
@@ -14,6 +15,11 @@ const PROP_COLLISION_INSTANCES_MAGIC: &[u8; 8] = b"PEXCOL3\0";
 const MAX_PROP_COLLISION_BOXES: usize = 8192;
 const MAX_PROP_COLLISION_TRIANGLES: usize = 250_000;
 const MAX_PROP_COLLISION_INSTANCES: usize = 8192;
+
+// A converted district can contain more than a million collision triangles.
+// Its immutable source package is shared across player sessions; each engine
+// still builds independent mutable gameplay state from it.
+static SKATE_MAP_CACHE: OnceLock<Mutex<Option<(PathBuf, Arc<SkateMap>)>>> = OnceLock::new();
 
 pub const SKATER_BONE_NAMES: [&str; 36] = [
     "TRAJECTORY",
@@ -137,13 +143,33 @@ impl SkateSession {
     /// data. The engine consumes its RWCM collision archive and native rails;
     /// map coordinates are in the same metre/block space as the PEX adapter.
     pub fn load_skate_map(asset_root: &Path, map_path: &Path) -> Result<Self, String> {
-        let map = SkateMap::load(map_path)?;
+        let preparation_started = std::time::Instant::now();
+        let canonical_path = map_path.canonicalize().map_err(|error| {
+            format!(
+                "could not resolve Skate map {}: {error}",
+                map_path.display()
+            )
+        })?;
+        let cache = SKATE_MAP_CACHE.get_or_init(|| Mutex::new(None));
+        let map = {
+            let mut cached = cache
+                .lock()
+                .map_err(|_| "Skate map cache is unavailable".to_owned())?;
+            if let Some((_, map)) = cached.as_ref().filter(|(path, _)| *path == canonical_path) {
+                Arc::clone(map)
+            } else {
+                let map = Arc::new(SkateMap::load(&canonical_path)?);
+                *cached = Some((canonical_path.clone(), Arc::clone(&map)));
+                map
+            }
+        };
         let spawn = map.spawn;
         let heading = map.heading;
         let mut session = Session::new_with_skate_map(asset_root, &map)?;
         session.set_difficulty(load_difficulty(asset_root)?);
         let prop_collision_path = authored_prop_collision_path(asset_root, map_path)?;
         let instance_path = prop_collision_path.with_extension("instances");
+        let prop_load_started = std::time::Instant::now();
         let (prop_collision_instances, collision) =
             match load_prop_collision_instances(&instance_path)? {
                 Some(instances) => {
@@ -152,10 +178,18 @@ impl SkateSession {
                 }
                 None => (Vec::new(), load_prop_collision(&prop_collision_path)),
             };
+        eprintln!(
+            "IW4L_SKATE_LOAD prop_data {}ms",
+            prop_load_started.elapsed().as_millis()
+        );
         match collision {
             Ok(triangles) if !triangles.is_empty() => {
+                let prop_build_started = std::time::Instant::now();
                 let count = session.set_moving_collision(triangles)?;
-                eprintln!("PEX_SKATE_PROP_COLLISION triangles={count}");
+                eprintln!(
+                    "PEX_SKATE_PROP_COLLISION triangles={count} build_ms={}",
+                    prop_build_started.elapsed().as_millis()
+                );
             }
             Ok(_) => {}
             Err(error) => {
@@ -168,6 +202,10 @@ impl SkateSession {
         let initial_pose = session
             .activate(spawn, heading)
             .map_err(|error| format!("could not activate Skate map {:?}: {error}", map.name))?;
+        eprintln!(
+            "IW4L_SKATE_LOAD session_total {}ms",
+            preparation_started.elapsed().as_millis()
+        );
         Ok(Self {
             session,
             prop_collision_instances,
@@ -180,7 +218,7 @@ impl SkateSession {
 
     /// One deterministic 60 Hz engine step. The caller owns the server tick
     /// accumulator and must not call this directly from client packet cadence.
-    pub fn tick(&mut self, controls: Controls) -> Result<SkatePose, String> {
+    pub fn tick(&mut self, controls: Controls) -> Result<(), String> {
         if pressed_edge(controls.respawn, self.previous_respawn) {
             if let Err(error) = self.session.return_to_checkpoint() {
                 eprintln!("PEX Skate checkpoint respawn unavailable: {error}");
@@ -192,7 +230,22 @@ impl SkateSession {
         }
         self.previous_shove = controls.shove;
         self.session.tick(to_engine_controls(controls))?;
-        Ok(self.pose())
+        Ok(())
+    }
+
+    /// Reposition a prepared session after installing the active world's
+    /// collision. This is used to prewarm engine assets before a player enters
+    /// Skate mode, avoiding a large first-use hitch on the server tick.
+    pub fn activate_at(&mut self, spawn: [f32; 3], heading: f32) -> Result<(), String> {
+        let initial_pose = self
+            .session
+            .activate(spawn, heading)
+            .map_err(|error| format!("could not activate Skate session: {error}"))?;
+        self.bone_names = initial_pose.names;
+        self.bones_root_relative = None;
+        self.previous_respawn = false;
+        self.previous_shove = false;
+        Ok(())
     }
 
     /// Start a shove immediately from a fresh server input edge. Returns

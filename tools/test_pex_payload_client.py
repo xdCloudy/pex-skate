@@ -31,6 +31,7 @@ PLAY_SERVERBOUND_CUSTOM_PAYLOAD = 0x16
 PLAY_SERVERBOUND_CHAT_COMMAND = 0x07
 PLAY_SERVERBOUND_KEEP_ALIVE = 0x1C
 PLAY_SERVERBOUND_PLAYER_LOADED = 0x2C
+PLAY_SERVERBOUND_MOVE_PLAYER_POS = 0x1E
 PLAY_SERVERBOUND_PONG = 0x2D
 PLAY_SERVERBOUND_TELEPORT_CONFIRM = 0x00
 
@@ -306,9 +307,13 @@ def play_until_ack(
     exercise_timeout: float = 120.0,
     exercise_duration: float = GAMEPLAY_SMOKE_DURATION,
     asset_root: str | None = None,
+    control_only: bool = False,
+    spawn_offset: float = 0.0,
 ) -> None:
     saw_login = False
     skate_command_sent = False
+    skate_hello_acknowledged = False
+    spawn_adjusted = spawn_offset == 0.0
     skate_active = False
     next_sequence = 0
     last_sent_sequence: int | None = None
@@ -365,7 +370,8 @@ def play_until_ack(
                 print(f"PEX accepted Skate protocol {payload[0]} over a real Minecraft 26.3 player connection.")
                 if not exercise_skate:
                     return
-                if not skate_command_sent:
+                skate_hello_acknowledged = True
+                if spawn_adjusted and not skate_command_sent:
                     client.send(PLAY_SERVERBOUND_CHAT_COMMAND, encode_string("skate"))
                     skate_command_sent = True
                     print("Requested /skate; waiting for an active engine state and consumed control.")
@@ -374,7 +380,7 @@ def play_until_ack(
                 state_count += 1
                 if state.active:
                     if not skate_active:
-                        print("PEX Skate state active=true; checking movement and stock Ollie input.")
+                        print("PEX Skate state active=true; checking movement and stock right-stick trick input.")
                         active_started_at = time.monotonic()
                         first_state = state
                     skate_active = True
@@ -387,19 +393,27 @@ def play_until_ack(
                     saw_trick |= bool(state.trick_name) or state.sequence_score > 0.0
                     now = time.monotonic()
                     elapsed = now - active_started_at if active_started_at is not None else 0.0
-                    required_control_count = 24 if exercise_duration > 0 else 1
-                    if (last_sent_sequence is not None
-                            and state.acknowledged_sequence == last_sent_sequence
-                            and last_accounted_sequence != state.acknowledged_sequence):
+                    required_control_count = (
+                        1 if control_only else 24 if exercise_duration > 0 else 1
+                    )
+                    if state.acknowledged_sequence in outstanding_sequences:
                         control_acknowledged = True
-                        consumed_control_count += 1
-                        last_accounted_sequence = state.acknowledged_sequence
-                    if ((last_sent_sequence is None
-                         or state.acknowledged_sequence == last_sent_sequence)
+                        accounted_from = last_accounted_sequence or 0
+                        acknowledged_count = (state.acknowledged_sequence - accounted_from) & 0xFFFFFFFF
+                        if acknowledged_count:
+                            consumed_control_count += min(acknowledged_count, len(outstanding_sequences))
+                            last_accounted_sequence = state.acknowledged_sequence
+                            outstanding_sequences = {
+                                sequence for sequence in outstanding_sequences
+                                if ((sequence - state.acknowledged_sequence) & 0xFFFFFFFF) > 0
+                            }
+                    if (len(outstanding_sequences) < 64
                             and (elapsed < exercise_duration
                                  or consumed_control_count < required_control_count)):
                         next_sequence = (next_sequence + 1) & 0xFFFFFFFF
-                        if consumed_control_count < 12:
+                        if control_only:
+                            control = encode_control(next_sequence)
+                        elif consumed_control_count < 12:
                             control = encode_control(next_sequence, push=True, forward=1.0)
                         elif ollie_points and consumed_control_count < 18:
                             control = encode_control(
@@ -421,8 +435,16 @@ def play_until_ack(
                         if len(outstanding_sequences) > 256:
                             outstanding_sequences.pop()
                         last_sent_sequence = next_sequence
-                    if state.acknowledged_sequence in outstanding_sequences:
-                        control_acknowledged = True
+                    if (control_only
+                            and elapsed >= exercise_duration
+                            and consumed_control_count >= required_control_count
+                            and control_acknowledged):
+                        print(
+                            "PEX control smoke passed: control sequence "
+                            f"{state.acknowledged_sequence} consumed, "
+                            f"{consumed_control_count} inputs, states={state_count}."
+                        )
+                        return
                     if (elapsed >= exercise_duration
                             and consumed_control_count >= required_control_count
                             and control_acknowledged):
@@ -437,7 +459,7 @@ def play_until_ack(
                             )
                         if not saw_trick:
                             raise RuntimeError(
-                                "PEX consumed the stock Ollie flick but reported no trick or score "
+                                "PEX consumed stock right-stick gesture input but reported no trick or score "
                                 f"(trick={last_state.trick_name!r}, "
                                 f"sequence={last_state.sequence_score:.1f}, "
                                 f"line={last_state.line_score:.1f}, "
@@ -469,6 +491,17 @@ def play_until_ack(
             x, y, z, _dx, _dy, _dz, yaw, pitch = struct.unpack_from(">6d2f", body, offset)
             confirmation = encode_varint(teleport_id) + struct.pack(">3d2f", x, y, z, yaw, pitch)
             client.send(PLAY_SERVERBOUND_TELEPORT_CONFIRM, confirmation)
+            if exercise_skate and not spawn_adjusted:
+                client.send(
+                    PLAY_SERVERBOUND_MOVE_PLAYER_POS,
+                    struct.pack(">3d?", x + spawn_offset, y, z, False),
+                )
+                spawn_adjusted = True
+                print(f"Moved smoke player {spawn_offset:.0f} blocks from spawn to isolate physics.")
+                if skate_hello_acknowledged and not skate_command_sent:
+                    client.send(PLAY_SERVERBOUND_CHAT_COMMAND, encode_string("skate"))
+                    skate_command_sent = True
+                    print("Requested /skate; waiting for an active engine state and consumed control.")
         elif packet_id == 0x76:  # Server returned to configuration.
             client.send(0x10)  # Acknowledge configuration transition.
             config_step(client)
@@ -487,13 +520,18 @@ def main() -> int:
     parser.add_argument("--exercise-timeout", type=float, default=120.0)
     parser.add_argument("--exercise-duration", type=float, default=GAMEPLAY_SMOKE_DURATION)
     parser.add_argument("--asset-root", help="Converted Skate private data root for stock gesture input.")
+    parser.add_argument("--control-only", action="store_true",
+                        help="require one consumed control without movement or trick assertions")
+    parser.add_argument("--spawn-offset", type=float, default=0.0,
+                        help="move this smoke player horizontally from the server spawn before skating")
     args = parser.parse_args()
     try:
         with MinecraftConnection(args.host, args.port) as client:
             perform_handshake(client, args.username)
             config_step(client)
             play_until_ack(client, args.exercise_skate, args.exercise_timeout,
-                           args.exercise_duration, args.asset_root)
+                           args.exercise_duration, args.asset_root, args.control_only,
+                           args.spawn_offset)
     except (OSError, ValueError, ConnectionError, TimeoutError, zlib.error) as error:
         print(f"PEX player payload test failed: {error}", file=sys.stderr)
         return 1
