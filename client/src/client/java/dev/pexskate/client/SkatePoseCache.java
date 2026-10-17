@@ -6,11 +6,20 @@ import java.util.Map;
 /** Interpolated, server-authoritative Skate 3 joint positions keyed by entity id. */
 public final class SkatePoseCache {
     private static final long INTERPOLATION_DELAY_NANOS = 75_000_000L;
-    private static final long LOCAL_INTERPOLATION_DELAY_NANOS = 25_000_000L;
-    private static final long MAX_EXTRAPOLATION_NANOS = 50_000_000L;
+    // The local player's chase camera and board must follow the newest server
+    // pose immediately. A 25 ms interpolation buffer made both feel as though
+    // they were trailing the skater during pushes and turns.
+    private static final long LOCAL_INTERPOLATION_DELAY_NANOS = 0L;
+    private static final long MAX_LOCAL_PREDICTION_NANOS = 100_000_000L;
+    private static final long MAX_LOCAL_PREDICTION_LEAD_NANOS = 50_000_000L;
+    private static final long DEFAULT_LOCAL_PREDICTION_LEAD_NANOS = 25_000_000L;
     private static final long MAX_INTERPOLATION_GAP_NANOS = 500_000_000L;
     private static final float SNAP_DISTANCE_SQUARED = 64.0f;
-    private static volatile long maxExtrapolationNanos = 25_000_000L;
+    // The RTT-derived lead compensates for the age of the server snapshot at
+    // receipt. It is added to render time since receipt, rather than only
+    // limiting that elapsed time; otherwise a fresh packet still renders an
+    // already-stale pose with no prediction at all.
+    private static volatile long localPredictionLeadNanos = DEFAULT_LOCAL_PREDICTION_LEAD_NANOS;
     private static final Map<Integer, Track> TRACKS = new HashMap<>();
 
     private SkatePoseCache() {}
@@ -57,11 +66,12 @@ public final class SkatePoseCache {
 
     public static void updateInputRoundTrip(long roundTripNanos) {
         if (roundTripNanos <= 0L) return;
-        maxExtrapolationNanos = Math.clamp(roundTripNanos / 2L, 5_000_000L, MAX_EXTRAPOLATION_NANOS);
+        localPredictionLeadNanos = Math.clamp(roundTripNanos / 2L,
+                5_000_000L, MAX_LOCAL_PREDICTION_LEAD_NANOS);
     }
 
     public static void resetInputRoundTrip() {
-        maxExtrapolationNanos = 25_000_000L;
+        localPredictionLeadNanos = DEFAULT_LOCAL_PREDICTION_LEAD_NANOS;
     }
 
     public static Pose sample(int entityId) {
@@ -78,12 +88,17 @@ public final class SkatePoseCache {
         long sampleTime = System.nanoTime() - delay;
         if (b.time <= a.time) return new Pose(b, b, 1.0f, 0.0f);
         if (sampleTime >= b.time) {
-            long extrapolation = localEntity
-                    ? Math.min(sampleTime - b.time, maxExtrapolationNanos) : 0L;
+            long extrapolation = extrapolationNanos(sampleTime - b.time, localEntity);
             return new Pose(b, b, 1.0f, extrapolation / 1_000_000_000.0f);
         }
         if (sampleTime <= a.time) return new Pose(a, a, 0.0f);
         return new Pose(a, b, (float) (sampleTime - a.time) / (float) (b.time - a.time), 0.0f);
+    }
+
+    static long extrapolationNanos(long elapsedSinceSnapshotNanos, boolean localEntity) {
+        if (!localEntity) return 0L;
+        long elapsed = Math.max(0L, elapsedSinceSnapshotNanos);
+        return Math.min(localPredictionLeadNanos + elapsed, MAX_LOCAL_PREDICTION_NANOS);
     }
 
     private static float boardYaw(SkateStatePayload p) {

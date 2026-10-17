@@ -145,7 +145,9 @@ run_smoke_players() {
   for ((player_index = 1; player_index <= smoke_players; player_index++)); do
     local -a player_args=(--username "PexSkateSmoke${player_index}")
     if [[ "$exercise_skate" == true ]]; then
-      player_args+=(--exercise-skate --exercise-timeout "$exercise_timeout")
+      player_args+=(--exercise-skate --exercise-timeout "$exercise_timeout"
+        --exercise-duration "${PEX_SKATE_SMOKE_GAMEPLAY_DURATION:-3}"
+        --asset-root "$data_root/private")
     fi
     python3 "$script_dir/test_pex_payload_client.py" "${player_args[@]}" &
     player_pids+=("$!")
@@ -169,6 +171,7 @@ run_server_smoke() {
   if [[ -n "$converted_data" ]]; then
     local exercise_timeout=${PEX_SKATE_SMOKE_TIMEOUT_SECONDS:-180}
     if ! run_smoke_players true "$exercise_timeout"; then
+      grep -E 'MAP_READ_TIMING|IW4L_SKATE_LOAD|SKATE_PHYSICS_MODE|SKATE_GRIND_READY|Can.t keep up' server.log | tail -n 60 || true
       tail -n 12 server.log | cut -c1-1200
       return 1
     fi

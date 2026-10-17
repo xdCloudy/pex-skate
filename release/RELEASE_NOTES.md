@@ -2,6 +2,10 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 
 ### Fixes in this build
 
+- Remove the local 25 ms Skate-pose delay so the local camera and skater follow the newest shared pose sample.
+- Apply RTT-derived local pose prediction at packet receipt and advance it with render time, instead of using the RTT only as a post-receipt extrapolation cap.
+- Pace the gameplay smoke inputs against server acknowledgements so delayed state packets cannot skip stock Ollie gesture points.
+- Strengthen the data-backed runtime smoke to verify movement and a recognized trick with simultaneous clients in Minecraft-world mode.
 - Apply the Skate chase camera after Minecraft's camera extraction so vanilla camera setup cannot overwrite the Skate-follow position; synchronize the final render pose, projection, and culling frustum.
 - Anchor Minecraft-world chase view to the interpolated Skate skeleton and test heading and look-at camera math.
 - Keep OPAQUE GLB materials opaque when source textures carry packed alpha data, preventing sparse or flickering skater and board meshes.
@@ -33,6 +37,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Fabric client controls, board/skater presentation, and map rendering.
 - Converted normal maps contribute tangent-frame-aware per-vertex diffuse lighting.
 - The client map loader has a synthetic SKATE14 package regression fixture covering authored materials, tangent-space normal mapping, and triangle intersection parsing without requiring game assets.
+- Local skater and chase-camera presentation now predict forward from the measured input round trip at packet receipt, then advance from that snapshot time. Both render from the same predicted pose.
 - The ISO converter extracts the optional `worlddmo.big` catalog and exports authored prop packages and collision sidecars when the archive is present.
 - The Fabric SKATE14 reader now follows the writer's lightmap/normal-map field order and accommodates the real University district texture set.
 - Incandescent and unlit retail materials preserve their base albedo as emissive light.
@@ -52,4 +57,4 @@ See `INSTALL.md` in `PEX-Skate-26.3.zip`. Each player needs the Fabric client an
 
 ### Known limitations
 
-This is an alpha and is not production-ready. All 10 districts converted from the supplied Xbox 360 ISO have now each passed a live PEX runtime smoke test: an offline Minecraft 26.3 client authenticated, `/skate` activated an engine session on the selected map, one v9 control sequence was consumed, and the server status handshake succeeded. This validates the server session startup and input path against real converted district data, not Fabric rendering or gameplay feel in an actual Minecraft client. Some authored DMO template IDs can be absent from the supplied archive and are reported/skipped. Board impacts can translate and yaw-rotate authored district props around a shared collision pivot, damp their motion, and synchronize transforms to clients; clients interpolate the received poses between snapshots. Authored mass and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions are not implemented. Multiplayer behavior, visual rendering, controller input and long-distance skating still need live gameplay validation.
+This is an alpha and is not production-ready. All 10 districts converted from the supplied Xbox 360 ISO have each passed a PEX runtime smoke test. A separate data-backed smoke now drives movement and the stock Ollie gesture for two simultaneous clients in Minecraft-world mode. These checks do not validate Fabric rendering, camera feel, controller input, or long-distance gameplay in a real Minecraft client. Skate session initialization is synchronous; multiple players activating Skate together can temporarily delay PEX ticks while the engine initializes. Some authored DMO template IDs can be absent from the supplied archive and are reported/skipped. Board impacts can translate and yaw-rotate authored district props around a shared collision pivot, damp their motion, and synchronize transforms to clients; clients interpolate the received poses between snapshots. Authored mass and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions remain unimplemented.

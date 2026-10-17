@@ -84,10 +84,12 @@ class MinecraftClientProtocolTests(unittest.TestCase):
         payload.extend(b"\0" * 64)
         payload.extend(struct.pack(">I", 0x12345678))
 
-        self.assertEqual(
-            test_pex_payload_client.decode_skate_state(bytes(payload)),
-            (True, 0x12345678),
-        )
+        decoded = test_pex_payload_client.decode_skate_state(bytes(payload))
+        self.assertTrue(decoded.active)
+        self.assertEqual(decoded.entity_id, 42)
+        self.assertEqual(decoded.root, (0.0, 0.0, 0.0))
+        self.assertEqual(decoded.velocity, (0.0, 0.0, 0.0))
+        self.assertEqual(decoded.acknowledged_sequence, 0x12345678)
 
     def test_state_v11_decoder_rejects_truncated_or_unexpected_payloads(self) -> None:
         with self.assertRaisesRegex(ValueError, "state-v11"):
@@ -98,13 +100,24 @@ class MinecraftClientProtocolTests(unittest.TestCase):
     def test_push_control_uses_version_nine_layout_and_big_endian_sequence(self) -> None:
         payload = test_pex_payload_client.encode_push_control(0x12345678)
         self.assertEqual(payload, bytes((9, 1, 0, 0, 127, 0, 0, 0, 0)) + bytes.fromhex("12345678"))
+        flick = test_pex_payload_client.encode_control(1, right_x=-1.0, right_y=1.0)
+        self.assertEqual(flick, bytes((9, 0, 0, 0, 0, 0, 129, 127, 0)) + bytes.fromhex("00000001"))
 
     def test_gameplay_smoke_requests_skate_and_waits_for_control_ack(self) -> None:
-        def state_packet(acknowledged_sequence: int) -> bytes:
+        def state_packet(acknowledged_sequence: int, root_x: float = 0.0,
+                         velocity_x: float = 0.0, trick_name: str = "") -> bytes:
             state = bytearray((11, 1))
             state.extend(struct.pack(">I", 42))
-            state.extend(b"\0" * (18 * 4 + 1))
-            state.extend(struct.pack(">H", 0))
+            state.extend(struct.pack(">18f", root_x, 0.0, 0.0,
+                                     0.0, 0.0, 0.0,
+                                     0.0, 0.0, 0.0, 1.0,
+                                     velocity_x, 0.0, 0.0,
+                                     1.0 if trick_name else 0.0, 0.0,
+                                     1.0 if trick_name else 0.0, 1.0, 0.0))
+            state.extend(b"\0")
+            encoded_trick = trick_name.encode("utf-8")
+            state.extend(struct.pack(">H", len(encoded_trick)))
+            state.extend(encoded_trick)
             state.extend(b"\0" * 564)
             state.extend(b"\0\0\0")  # no map selection
             state.extend(b"\0" * 64)  # map and prop digests
@@ -118,7 +131,8 @@ class MinecraftClientProtocolTests(unittest.TestCase):
                 test_pex_payload_client.encode_string("pexskate:hello_ack") + bytes((8,)),
             ),
             (test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD, state_packet(0)),
-            (test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD, state_packet(1)),
+            (test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD,
+             state_packet(1, 1.0, 1.0, "Ollie")),
         ]
 
         class FakeConnection:
@@ -134,7 +148,9 @@ class MinecraftClientProtocolTests(unittest.TestCase):
                 self.sent.append((packet_id, body))
 
         client = FakeConnection()
-        test_pex_payload_client.play_until_ack(client, exercise_skate=True, exercise_timeout=1)
+        test_pex_payload_client.play_until_ack(
+            client, exercise_skate=True, exercise_timeout=1, exercise_duration=0
+        )
 
         self.assertIn(
             (test_pex_payload_client.PLAY_SERVERBOUND_CHAT_COMMAND,
