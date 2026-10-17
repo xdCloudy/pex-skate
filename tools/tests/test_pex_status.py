@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
+import struct
 import threading
 import unittest
 
@@ -69,6 +70,85 @@ class MinecraftClientProtocolTests(unittest.TestCase):
                 decoded, offset = test_pex_payload_client.decode_varint(packet)
                 self.assertEqual(decoded, value)
                 self.assertEqual(offset, len(packet))
+
+    def test_state_v11_decoder_reads_active_session_and_consumed_control(self) -> None:
+        filename = b"University.skate"
+        payload = bytearray((11, 1))
+        payload.extend(struct.pack(">I", 42))
+        payload.extend(b"\0" * (18 * 4 + 1))
+        payload.extend(struct.pack(">H", 0))
+        payload.extend(b"\0" * 564)
+        payload.extend(b"\1")
+        payload.extend(struct.pack(">H", len(filename)))
+        payload.extend(filename)
+        payload.extend(b"\0" * 64)
+        payload.extend(struct.pack(">I", 0x12345678))
+
+        self.assertEqual(
+            test_pex_payload_client.decode_skate_state(bytes(payload)),
+            (True, 0x12345678),
+        )
+
+    def test_state_v11_decoder_rejects_truncated_or_unexpected_payloads(self) -> None:
+        with self.assertRaisesRegex(ValueError, "state-v11"):
+            test_pex_payload_client.decode_skate_state(bytes((10,)) + b"\0" * 100)
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            test_pex_payload_client.decode_skate_state(bytes((11, 1)) + b"\0" * 79)
+
+    def test_push_control_uses_version_nine_layout_and_big_endian_sequence(self) -> None:
+        payload = test_pex_payload_client.encode_push_control(0x12345678)
+        self.assertEqual(payload, bytes((9, 1, 0, 0, 127, 0, 0, 0, 0)) + bytes.fromhex("12345678"))
+
+    def test_gameplay_smoke_requests_skate_and_waits_for_control_ack(self) -> None:
+        def state_packet(acknowledged_sequence: int) -> bytes:
+            state = bytearray((11, 1))
+            state.extend(struct.pack(">I", 42))
+            state.extend(b"\0" * (18 * 4 + 1))
+            state.extend(struct.pack(">H", 0))
+            state.extend(b"\0" * 564)
+            state.extend(b"\0\0\0")  # no map selection
+            state.extend(b"\0" * 64)  # map and prop digests
+            state.extend(struct.pack(">I", acknowledged_sequence))
+            return test_pex_payload_client.encode_string("pexskate:state") + state
+
+        packets = [
+            (test_pex_payload_client.PLAY_CLIENTBOUND_LOGIN, b""),
+            (
+                test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD,
+                test_pex_payload_client.encode_string("pexskate:hello_ack") + bytes((8,)),
+            ),
+            (test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD, state_packet(0)),
+            (test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD, state_packet(1)),
+        ]
+
+        class FakeConnection:
+            stream = None
+
+            def __init__(self) -> None:
+                self.sent: list[tuple[int, bytes]] = []
+
+            def receive(self) -> tuple[int, bytes]:
+                return packets.pop(0)
+
+            def send(self, packet_id: int, body: bytes = b"") -> None:
+                self.sent.append((packet_id, body))
+
+        client = FakeConnection()
+        test_pex_payload_client.play_until_ack(client, exercise_skate=True, exercise_timeout=1)
+
+        self.assertIn(
+            (test_pex_payload_client.PLAY_SERVERBOUND_CHAT_COMMAND,
+             test_pex_payload_client.encode_string("skate")),
+            client.sent,
+        )
+        control_packets = [
+            body for packet_id, body in client.sent
+            if packet_id == test_pex_payload_client.PLAY_SERVERBOUND_CUSTOM_PAYLOAD
+            and body.startswith(test_pex_payload_client.encode_string("pexskate:control"))
+        ]
+        self.assertEqual(len(control_packets), 1)
+        control_channel = test_pex_payload_client.encode_string("pexskate:control")
+        self.assertEqual(control_packets[0][len(control_channel):], test_pex_payload_client.encode_push_control(1))
 
 
 if __name__ == "__main__":

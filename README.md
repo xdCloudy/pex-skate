@@ -126,6 +126,8 @@ The Rust unit suite, WebAssembly component build, Fabric client build, and local
 
 CI also downloads the pinned PEX 1.0.0 Linux server, verifies its SHA-256, approves only the plugin's declared `fs.read.data` permission for the disposable test server, then checks that PEX compiles and loads the component, accepts an offline Minecraft 26.3 player, returns the PEX Skate protocol-8 handshake acknowledgement, and completes a status handshake advertising protocol 777. This exercises the actual client-to-server custom payload event and server-to-client payload path; it does not load converted Skate 3 assets or validate gameplay rendering and physics in a Minecraft client.
 
+To exercise a converted server data folder locally, build or download `pex-skate.wasm` and run `bash tools/smoke-test-pex-runtime.sh path/to/pex-skate.wasm path/to/converter-output`. The helper copies the converted private assets and maps into a disposable PEX server, logs in an offline test player, requests `/skate`, and requires an active state plus a v9 control sequence acknowledged by a simulation step. This validates server session startup and input consumption with your converted data; it does not validate Fabric rendering, controller input, or gameplay feel in a live Minecraft client.
+
 ## License and credits
 
 PEX Skate is GPL-3.0-only. The server API comes from [PEX](https://github.com/Conman1533/PEX). The linked SkateGM engine host is Apache-2.0 and retains its upstream notices. SkateGM's GPL-3.0 exporter and third-party notices are vendored in `tools/skategm-exporter/`. No EA source code or proprietary game assets are included. See [LICENSE](LICENSE) and [vendor/NOTICE.md](vendor/NOTICE.md).

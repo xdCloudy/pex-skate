@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Connect an offline Minecraft 26.3 client and verify the PEX Skate hello ack."""
+"""Connect an offline Minecraft 26.3 client and smoke-test PEX Skate."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import socket
 import struct
 import sys
+import time
 import uuid
 import zlib
 
@@ -23,6 +24,7 @@ PLAY_CLIENTBOUND_LOGIN = 0x32
 PLAY_CLIENTBOUND_PING = 0x3E
 PLAY_CLIENTBOUND_POSITION = 0x49
 PLAY_SERVERBOUND_CUSTOM_PAYLOAD = 0x16
+PLAY_SERVERBOUND_CHAT_COMMAND = 0x07
 PLAY_SERVERBOUND_KEEP_ALIVE = 0x1C
 PLAY_SERVERBOUND_PLAYER_LOADED = 0x2C
 PLAY_SERVERBOUND_PONG = 0x2D
@@ -59,6 +61,33 @@ def decode_varint(data: bytes, offset: int = 0) -> tuple[int, int]:
 def encode_string(value: str) -> bytes:
     encoded = value.encode("utf-8")
     return encode_varint(len(encoded)) + encoded
+
+
+def decode_skate_state(data: bytes) -> tuple[bool, int]:
+    """Read the active flag and acknowledged sequence from a v11 state payload."""
+    if len(data) < 81 or data[0] != 11:
+        raise ValueError("expected a complete PEX Skate state-v11 payload")
+    active = data[1] != 0
+    offset = 6 + 18 * 4 + 1
+    trick_length = int.from_bytes(data[offset:offset + 2], "big")
+    if trick_length > 192:
+        raise ValueError("PEX Skate state trick name exceeds the protocol limit")
+    offset += 2 + trick_length + 564  # fixed hips, skeleton, camera and rotation fields
+    if offset + 3 > len(data):
+        raise ValueError("truncated PEX Skate state visual payload")
+    offset += 1  # map-backed flag
+    map_name_length = int.from_bytes(data[offset:offset + 2], "big")
+    if map_name_length > 512:
+        raise ValueError("PEX Skate map filename exceeds the protocol limit")
+    offset += 2 + map_name_length + 64  # filename and two SHA-256 digests
+    if offset + 4 > len(data):
+        raise ValueError("truncated PEX Skate state acknowledgement")
+    return active, int.from_bytes(data[offset:offset + 4], "big")
+
+
+def encode_push_control(sequence: int) -> bytes:
+    """Build a v9 right-foot push control with a big-endian sequence number."""
+    return bytes((9, 1, 0, 0, 127, 0, 0, 0, 0)) + struct.pack(">I", sequence & 0xFFFFFFFF)
 
 
 def read_exact(stream: socket.socket, size: int) -> bytes:
@@ -205,10 +234,28 @@ def config_step(client: MinecraftConnection) -> None:
             client.send(0x06, body[:16] + encode_varint(1))
 
 
-def play_until_ack(client: MinecraftConnection) -> None:
+def play_until_ack(
+    client: MinecraftConnection,
+    exercise_skate: bool = False,
+    exercise_timeout: float = 120.0,
+) -> None:
     saw_login = False
+    skate_command_sent = False
+    skate_active = False
+    next_control_at = 0.0
+    next_sequence = 0
+    outstanding_sequences: set[int] = set()
+    deadline = time.monotonic() + exercise_timeout
+    if exercise_skate and client.stream is not None:
+        client.stream.settimeout(0.25)
     while True:
-        packet_id, body = client.receive()
+        if exercise_skate and time.monotonic() >= deadline:
+            missing = "an active Skate session" if not skate_active else "a consumed control sequence"
+            raise TimeoutError(f"timed out waiting for {missing}")
+        try:
+            packet_id, body = client.receive()
+        except TimeoutError:
+            continue
         print(f"Minecraft play packet {packet_id:#04x} ({len(body)} bytes).")
         if packet_id == PLAY_CLIENTBOUND_DISCONNECT:
             raise ConnectionError(f"server disconnected the play client: {body[:64].hex()}")
@@ -216,7 +263,8 @@ def play_until_ack(client: MinecraftConnection) -> None:
             saw_login = True
             client.send(PLAY_SERVERBOUND_PLAYER_LOADED)
             client.send(PLAY_SERVERBOUND_CUSTOM_PAYLOAD, encode_string("pexskate:hello") + bytes([SKATE_PROTOCOL_VERSION]))
-            client.send(PLAY_SERVERBOUND_CUSTOM_PAYLOAD, encode_string("pexskate:control") + bytes.fromhex("09e77fc840c0817f0712345678"))
+            if not exercise_skate:
+                client.send(PLAY_SERVERBOUND_CUSTOM_PAYLOAD, encode_string("pexskate:control") + bytes.fromhex("09e77fc840c0817f0712345678"))
         elif packet_id == PLAY_CLIENTBOUND_CUSTOM_PAYLOAD:
             channel_length, offset = decode_varint(body)
             channel = body[offset:offset + channel_length].decode("utf-8")
@@ -225,7 +273,33 @@ def play_until_ack(client: MinecraftConnection) -> None:
                 if payload != bytes([SKATE_PROTOCOL_VERSION]):
                     raise ValueError(f"server acknowledged unexpected Skate protocol {payload.hex()}")
                 print(f"PEX accepted Skate protocol {payload[0]} over a real Minecraft 26.3 player connection.")
-                return
+                if not exercise_skate:
+                    return
+                if not skate_command_sent:
+                    client.send(PLAY_SERVERBOUND_CHAT_COMMAND, encode_string("skate"))
+                    skate_command_sent = True
+                    print("Requested /skate; waiting for an active engine state and consumed control.")
+            elif channel == "pexskate:state" and exercise_skate:
+                active, acknowledged_sequence = decode_skate_state(payload)
+                if active:
+                    skate_active = True
+                    now = time.monotonic()
+                    if now >= next_control_at:
+                        next_sequence = (next_sequence + 1) & 0xFFFFFFFF
+                        client.send(
+                            PLAY_SERVERBOUND_CUSTOM_PAYLOAD,
+                            encode_string("pexskate:control") + encode_push_control(next_sequence),
+                        )
+                        outstanding_sequences.add(next_sequence)
+                        if len(outstanding_sequences) > 256:
+                            outstanding_sequences.pop()
+                        next_control_at = now + 0.05
+                    if acknowledged_sequence in outstanding_sequences:
+                        print(
+                            "PEX started a Skate session and consumed control sequence "
+                            f"{acknowledged_sequence}."
+                        )
+                        return
         elif packet_id == PLAY_CLIENTBOUND_KEEP_ALIVE:
             client.send(PLAY_SERVERBOUND_KEEP_ALIVE, body)
         elif packet_id == PLAY_CLIENTBOUND_PING:
@@ -243,13 +317,19 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=25565)
     parser.add_argument("--username", default="PexSkateSmoke")
+    parser.add_argument(
+        "--exercise-skate",
+        action="store_true",
+        help="send /skate and require active state plus a server-consumed control (requires converted game data)",
+    )
+    parser.add_argument("--exercise-timeout", type=float, default=120.0)
     args = parser.parse_args()
     try:
         with MinecraftConnection(args.host, args.port) as client:
             perform_handshake(client, args.username)
             config_step(client)
-            play_until_ack(client)
-    except (OSError, ValueError, ConnectionError, zlib.error) as error:
+            play_until_ack(client, args.exercise_skate, args.exercise_timeout)
+    except (OSError, ValueError, ConnectionError, TimeoutError, zlib.error) as error:
         print(f"PEX player payload test failed: {error}", file=sys.stderr)
         return 1
     return 0

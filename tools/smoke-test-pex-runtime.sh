@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-plugin=${1:?usage: smoke-test-pex-runtime.sh <pex-skate.wasm>}
+plugin=${1:?usage: smoke-test-pex-runtime.sh <pex-skate.wasm> [converted-data-folder]}
+converted_data=${2:-}
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 server_version=v1.0.0
 server_sha256=198ec31b4fb96ac51970ca5366691da2b44add2954ab55ee0bda446423ed50ba
@@ -30,6 +31,28 @@ chmod +x "$work_dir/$server_name"
 
 mkdir -p "$work_dir/plugins"
 cp "$plugin" "$work_dir/plugins/pex-skate.wasm"
+if [[ -n "$converted_data" ]]; then
+  if [[ ! -d "$converted_data" ]]; then
+    echo "Converted data folder does not exist: $converted_data" >&2
+    exit 1
+  fi
+  data_root="$work_dir/plugins/data/pex-skate"
+  if [[ -d "$converted_data/assets/private" ]]; then
+    private_source="$converted_data/assets/private"
+  elif [[ -d "$converted_data/private" ]]; then
+    private_source="$converted_data/private"
+  else
+    echo "Converted data folder needs assets/private/ or private/" >&2
+    exit 1
+  fi
+  mkdir -p "$data_root/private"
+  cp -a "$private_source/." "$data_root/private/"
+  for entry in maps props settings maps.json; do
+    if [[ -e "$converted_data/$entry" ]]; then
+      cp -a "$converted_data/$entry" "$data_root/"
+    fi
+  done
+fi
 plugin_sha256=$(sha256sum "$work_dir/plugins/pex-skate.wasm" | cut -d ' ' -f 1)
 printf '{"entries":{"%s":{"permissions_requested":["fs.read.data"],"approved":true}}}\n' \
   "$plugin_sha256" > "$work_dir/plugins/permission_cache.json"
@@ -79,9 +102,20 @@ if [[ -z "$module_cache" ]]; then
   exit 1
 fi
 
-if ! python3 "$script_dir/test_pex_payload_client.py"; then
-  cat server.log
-  exit 1
+if [[ -n "$converted_data" ]]; then
+  if ! python3 "$script_dir/test_pex_payload_client.py" --exercise-skate --exercise-timeout 180; then
+    cat server.log
+    exit 1
+  fi
+else
+  if ! python3 "$script_dir/test_pex_payload_client.py"; then
+    cat server.log
+    exit 1
+  fi
 fi
 python3 "$script_dir/check_pex_status.py"
-echo "PEX $server_version loaded pex-skate.wasm, accepted an offline Minecraft 26.3 player, acknowledged the PEX Skate payload, and passed the status handshake."
+if [[ -n "$converted_data" ]]; then
+  echo "PEX $server_version loaded Skate data, activated an engine session, consumed client controls, and passed the status handshake."
+else
+  echo "PEX $server_version loaded pex-skate.wasm, accepted an offline Minecraft 26.3 player, acknowledged the PEX Skate payload, and passed the status handshake."
+fi
