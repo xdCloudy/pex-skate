@@ -77,7 +77,7 @@ class MinecraftConnection:
 
     def __enter__(self) -> MinecraftConnection:
         self.stream = socket.create_connection((self.host, self.port), timeout=5)
-        self.stream.settimeout(10)
+        self.stream.settimeout(30)
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -167,6 +167,7 @@ def config_settings() -> bytes:
 def config_step(client: MinecraftConnection) -> None:
     while True:
         packet_id, body = client.receive()
+        print(f"Minecraft configuration packet {packet_id:#04x} ({len(body)} bytes).")
         if packet_id == 0x02:  # Disconnect.
             raise ConnectionError(f"server rejected configuration: {body[:64].hex()}")
         if packet_id == 0x03:  # Finish configuration.

@@ -79,6 +79,9 @@ if [[ -z "$module_cache" ]]; then
   exit 1
 fi
 
-python3 "$script_dir/test_pex_payload_client.py"
+if ! python3 "$script_dir/test_pex_payload_client.py"; then
+  cat server.log
+  exit 1
+fi
 python3 "$script_dir/check_pex_status.py"
 echo "PEX $server_version loaded pex-skate.wasm, accepted an offline Minecraft 26.3 player, acknowledged the PEX Skate payload, and passed the status handshake."
