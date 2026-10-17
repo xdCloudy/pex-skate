@@ -2170,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "pex-skate"
-version = "0.1.0-alpha.54"
+version = "0.1.0-alpha.55"
 dependencies = [
  "pumpkin-plugin-api",
  "skate-data",

@@ -13,6 +13,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Converted normal maps contribute tangent-frame-aware per-vertex diffuse lighting.
 - Incandescent and unlit retail materials preserve their base albedo as emissive light.
 - The Skate chase camera clips against converted district triangles and moving props as well as Minecraft blocks.
+- Camera obstruction queries use a spatial index so static district meshes outside the camera segment are skipped.
 - Portable PEX WebAssembly plugin and Windows ISO conversion/setup helper.
 - Keyboard and standard gamepad controls for skating and tricks.
 - Active Skate key bindings no longer trigger overlapping Minecraft drop, inventory or sneak actions; unrelated rebound Minecraft controls remain available.

@@ -50,6 +50,9 @@ public final class SkateMapModel {
     private static final int MAX_MAP_BYTES = 768 * 1024 * 1024;
     private static final int MAX_VERTICES = 8_000_000;
     private static final int MAX_INDICES = 24_000_000;
+    private static final int CAMERA_CELL_SIZE = 64;
+    private static final long MAX_CAMERA_CELLS_PER_PRIMITIVE = 64L;
+    private static final long MAX_CAMERA_QUERY_CELLS = 128L;
     private static final long MAX_TEXTURE_PIXELS = 96_000_000L;
     private static final long LOAD_RETRY_COOLDOWN_NANOS = 5_000_000_000L;
     private static final long PROP_INTERPOLATION_NANOS = 50_000_000L;
@@ -97,8 +100,9 @@ public final class SkateMapModel {
         long sampleTime = System.nanoTime();
         double closest = 1.0;
         Map<Long, PropTransformSample> sampledOffsets = new HashMap<>();
-        for (Primitive primitive : current.primitives) {
-            if (primitive.alphaMode == 2) continue;
+        Vec3 minimum = new Vec3(Math.min(from.x, to.x), Math.min(from.y, to.y), Math.min(from.z, to.z));
+        Vec3 maximum = new Vec3(Math.max(from.x, to.x), Math.max(from.y, to.y), Math.max(from.z, to.z));
+        for (Primitive primitive : current.cameraCandidates(minimum, maximum)) {
             PropTransformSample offset = propOffset(current, primitive, sampledOffsets, sampleTime);
             Vec3 localFrom = toPrimitiveLocal(from, offset);
             Vec3 localTo = toPrimitiveLocal(to, offset);
@@ -1151,7 +1155,103 @@ public final class SkateMapModel {
         return (int) value;
     }
 
-    private record Model(String filename, String mapSha256, String propsSha256, List<Primitive> primitives, Sky sky) {}
+    private record CameraCell(int x, int y, int z) {}
+
+    private static final class Model {
+        private final String filename, mapSha256, propsSha256;
+        private final List<Primitive> primitives;
+        private final Sky sky;
+        private final Map<CameraCell, List<Primitive>> cameraGrid = new HashMap<>();
+        private final List<Primitive> cameraOverflow = new ArrayList<>();
+        private final List<Primitive> movingCameraPrimitives = new ArrayList<>();
+
+        private Model(String filename, String mapSha256, String propsSha256,
+                      List<Primitive> primitives, Sky sky) {
+            this.filename = filename;
+            this.mapSha256 = mapSha256;
+            this.propsSha256 = propsSha256;
+            this.primitives = primitives;
+            this.sky = sky;
+            indexCameraPrimitives();
+        }
+
+        private void indexCameraPrimitives() {
+            for (Primitive primitive : primitives) {
+                if (primitive.alphaMode == 2) continue;
+                if (primitive.propInstanceId != 0L) {
+                    movingCameraPrimitives.add(primitive);
+                    continue;
+                }
+                int minX = cameraCell(primitive.bounds[0]);
+                int minY = cameraCell(primitive.bounds[1]);
+                int minZ = cameraCell(primitive.bounds[2]);
+                int maxX = cameraCell(primitive.bounds[3]);
+                int maxY = cameraCell(primitive.bounds[4]);
+                int maxZ = cameraCell(primitive.bounds[5]);
+                long cells = boundedCellVolume(minX, minY, minZ, maxX, maxY, maxZ,
+                        MAX_CAMERA_CELLS_PER_PRIMITIVE);
+                if (cells <= 0L || cells > MAX_CAMERA_CELLS_PER_PRIMITIVE) {
+                    cameraOverflow.add(primitive);
+                    continue;
+                }
+                for (long x = minX; x <= maxX; x++) {
+                    for (long y = minY; y <= maxY; y++) {
+                        for (long z = minZ; z <= maxZ; z++) {
+                            CameraCell cell = new CameraCell((int) x, (int) y, (int) z);
+                            cameraGrid.computeIfAbsent(cell, ignored -> new ArrayList<>()).add(primitive);
+                        }
+                    }
+                }
+            }
+            cameraGrid.replaceAll((cell, entries) -> List.copyOf(entries));
+        }
+
+        private List<Primitive> cameraCandidates(Vec3 minimum, Vec3 maximum) {
+            int minX = cameraCell(minimum.x), minY = cameraCell(minimum.y), minZ = cameraCell(minimum.z);
+            int maxX = cameraCell(maximum.x), maxY = cameraCell(maximum.y), maxZ = cameraCell(maximum.z);
+            long cells = boundedCellVolume(minX, minY, minZ, maxX, maxY, maxZ,
+                    MAX_CAMERA_QUERY_CELLS);
+            Set<Primitive> unique = new java.util.HashSet<>();
+            List<Primitive> candidates = new ArrayList<>();
+            for (Primitive primitive : cameraOverflow) addCameraCandidate(unique, candidates, primitive);
+            for (Primitive primitive : movingCameraPrimitives) addCameraCandidate(unique, candidates, primitive);
+            if (cells <= 0L || cells > MAX_CAMERA_QUERY_CELLS) {
+                for (List<Primitive> entries : cameraGrid.values()) {
+                    for (Primitive primitive : entries) addCameraCandidate(unique, candidates, primitive);
+                }
+                return candidates;
+            }
+            for (long x = minX; x <= maxX; x++) {
+                for (long y = minY; y <= maxY; y++) {
+                    for (long z = minZ; z <= maxZ; z++) {
+                        List<Primitive> entries = cameraGrid.get(new CameraCell((int) x, (int) y, (int) z));
+                        if (entries == null) continue;
+                        for (Primitive primitive : entries) addCameraCandidate(unique, candidates, primitive);
+                    }
+                }
+            }
+            return candidates;
+        }
+
+        private static void addCameraCandidate(Set<Primitive> unique, List<Primitive> candidates,
+                                               Primitive primitive) {
+            if (unique.add(primitive)) candidates.add(primitive);
+        }
+
+        private static int cameraCell(double coordinate) {
+            return (int) Math.floor(coordinate / CAMERA_CELL_SIZE);
+        }
+
+        private static long boundedCellVolume(int minX, int minY, int minZ,
+                                              int maxX, int maxY, int maxZ, long limit) {
+            long x = (long) maxX - minX + 1L;
+            long y = (long) maxY - minY + 1L;
+            long z = (long) maxZ - minZ + 1L;
+            if (x <= 0L || y <= 0L || z <= 0L) return -1L;
+            if (x > limit || y > limit / x || z > limit / (x * y)) return limit + 1L;
+            return x * y * z;
+        }
+    }
     public record FogSettings(float near, float far, float power, float maximum,
                               float red, float green, float blue) {}
     private record ParsedModel(String filename, String mapName, String mapSha256, String propsSha256,
