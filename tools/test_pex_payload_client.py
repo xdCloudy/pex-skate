@@ -15,6 +15,19 @@ PROTOCOL_VERSION = 777
 SKATE_PROTOCOL_VERSION = 8
 MAX_PACKET_SIZE = 32 * 1024 * 1024
 
+# PEX 1.0.0's generated Minecraft 26.3 packet table.
+PLAY_CLIENTBOUND_DISCONNECT = 0x20
+PLAY_CLIENTBOUND_CUSTOM_PAYLOAD = 0x18
+PLAY_CLIENTBOUND_KEEP_ALIVE = 0x2D
+PLAY_CLIENTBOUND_LOGIN = 0x32
+PLAY_CLIENTBOUND_PING = 0x3E
+PLAY_CLIENTBOUND_POSITION = 0x49
+PLAY_SERVERBOUND_CUSTOM_PAYLOAD = 0x16
+PLAY_SERVERBOUND_KEEP_ALIVE = 0x1C
+PLAY_SERVERBOUND_PLAYER_LOADED = 0x2C
+PLAY_SERVERBOUND_PONG = 0x2D
+PLAY_SERVERBOUND_TELEPORT_CONFIRM = 0x00
+
 
 def encode_varint(value: int) -> bytes:
     value &= 0xFFFFFFFF
@@ -196,14 +209,15 @@ def play_until_ack(client: MinecraftConnection) -> None:
     saw_login = False
     while True:
         packet_id, body = client.receive()
-        if packet_id == 0x20:  # Disconnect.
+        print(f"Minecraft play packet {packet_id:#04x} ({len(body)} bytes).")
+        if packet_id == PLAY_CLIENTBOUND_DISCONNECT:
             raise ConnectionError(f"server disconnected the play client: {body[:64].hex()}")
-        if packet_id == 0x31 and not saw_login:  # Play login.
+        if packet_id == PLAY_CLIENTBOUND_LOGIN and not saw_login:
             saw_login = True
-            client.send(0x2C)  # Client loaded into the world.
-            client.send(0x16, encode_string("pexskate:hello") + bytes([SKATE_PROTOCOL_VERSION]))
-            client.send(0x16, encode_string("pexskate:control") + bytes.fromhex("09e77fc840c0817f0712345678"))
-        elif packet_id == 0x18:  # Clientbound custom payload.
+            client.send(PLAY_SERVERBOUND_PLAYER_LOADED)
+            client.send(PLAY_SERVERBOUND_CUSTOM_PAYLOAD, encode_string("pexskate:hello") + bytes([SKATE_PROTOCOL_VERSION]))
+            client.send(PLAY_SERVERBOUND_CUSTOM_PAYLOAD, encode_string("pexskate:control") + bytes.fromhex("09e77fc840c0817f0712345678"))
+        elif packet_id == PLAY_CLIENTBOUND_CUSTOM_PAYLOAD:
             channel_length, offset = decode_varint(body)
             channel = body[offset:offset + channel_length].decode("utf-8")
             payload = body[offset + channel_length:]
@@ -212,13 +226,13 @@ def play_until_ack(client: MinecraftConnection) -> None:
                     raise ValueError(f"server acknowledged unexpected Skate protocol {payload.hex()}")
                 print(f"PEX accepted Skate protocol {payload[0]} over a real Minecraft 26.3 player connection.")
                 return
-        elif packet_id == 0x2C:  # Keep alive.
-            client.send(0x1C, body)
-        elif packet_id == 0x3D:  # Ping.
-            client.send(0x2D, body)
-        elif packet_id == 0x48:  # Synchronize player position.
+        elif packet_id == PLAY_CLIENTBOUND_KEEP_ALIVE:
+            client.send(PLAY_SERVERBOUND_KEEP_ALIVE, body)
+        elif packet_id == PLAY_CLIENTBOUND_PING:
+            client.send(PLAY_SERVERBOUND_PONG, body)
+        elif packet_id == PLAY_CLIENTBOUND_POSITION:
             teleport_id, _ = decode_varint(body)
-            client.send(0x00, encode_varint(teleport_id))
+            client.send(PLAY_SERVERBOUND_TELEPORT_CONFIRM, encode_varint(teleport_id))
         elif packet_id == 0x76:  # Server returned to configuration.
             client.send(0x10)  # Acknowledge configuration transition.
             config_step(client)
