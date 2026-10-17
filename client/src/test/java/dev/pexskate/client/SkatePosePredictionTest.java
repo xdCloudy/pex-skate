@@ -102,6 +102,19 @@ final class SkatePosePredictionTest {
     }
 
     @Test
+    void closeSnapshotArrivalsDoNotAmplifyJointMotionIntoACameraJump() {
+        float[] predicted = SkatePoseCache.Pose.predictPoint(
+                new float[] {0.0f, 0.0f, 0.0f},
+                new float[] {0.1f, 0.0f, 0.0f},
+                1.0f,
+                0.001f,
+                0.025f,
+                new float[] {0.0f, 0.0f, 0.0f});
+
+        assertEquals(0.2f, predicted[0], 1.0e-5f);
+    }
+
+    @Test
     void localSkeletalRotationPredictionAdvancesWithTheJointPositions() {
         float[] predicted = SkatePoseCache.Pose.predictRotation(
                 new float[] {0.0f, 0.0f, 0.0f, 1.0f},
@@ -114,6 +127,20 @@ final class SkatePosePredictionTest {
 
         assertTrue(predictedAngle > (float) (Math.PI / 6.0));
         assertTrue(predictedAngle < (float) (Math.PI / 3.0));
+    }
+
+    @Test
+    void closeSnapshotArrivalsDoNotAmplifyJointRotationPrediction() {
+        float[] predicted = SkatePoseCache.Pose.predictRotation(
+                new float[] {0.0f, 0.0f, 0.0f, 1.0f},
+                new float[] {0.0f, (float) Math.sin(Math.PI / 12.0), 0.0f,
+                        (float) Math.cos(Math.PI / 12.0)},
+                1.0f,
+                0.001f,
+                0.025f);
+        float predictedAngle = 2.0f * (float) Math.atan2(Math.abs(predicted[1]), predicted[3]);
+
+        assertEquals((float) (Math.PI / 3.0), predictedAngle, 1.0e-4f);
     }
 
     @Test

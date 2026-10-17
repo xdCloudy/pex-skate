@@ -15,6 +15,10 @@ public final class SkatePoseCache {
     private static final long DEFAULT_LOCAL_PREDICTION_LEAD_NANOS = 25_000_000L;
     private static final long MAX_INTERPOLATION_GAP_NANOS = 500_000_000L;
     private static final float SNAP_DISTANCE_SQUARED = 64.0f;
+    // Server pose snapshots are produced on 20 Hz ticks. Client packet tasks
+    // can be drained together, so receipt timestamps shorter than half a tick
+    // must not be treated as the actual simulation interval for pose prediction.
+    private static final float MIN_PREDICTION_SAMPLE_SECONDS = 0.025f;
     // The RTT-derived lead compensates for the age of the server snapshot at
     // receipt. It is added to render time since receipt, rather than only
     // limiting that elapsed time; otherwise a fresh packet still renders an
@@ -184,10 +188,11 @@ public final class SkatePoseCache {
                                     float snapshotDeltaSeconds, float predictionSeconds,
                                     float[] fallbackVelocity) {
             float[] result = new float[3];
+            float predictionDelta = predictionSampleDelta(snapshotDeltaSeconds);
             for (int axis = 0; axis < 3; axis++) {
                 float sampled = lerp(first[axis], second[axis], interpolation);
-                if (snapshotDeltaSeconds > 0.0f && predictionSeconds > 0.0f) {
-                    sampled += (second[axis] - first[axis]) / snapshotDeltaSeconds * predictionSeconds;
+                if (predictionDelta > 0.0f && predictionSeconds > 0.0f) {
+                    sampled += (second[axis] - first[axis]) / predictionDelta * predictionSeconds;
                 } else if (predictionSeconds > 0.0f) {
                     sampled += fallbackVelocity[axis] * predictionSeconds;
                 }
@@ -222,7 +227,7 @@ public final class SkatePoseCache {
             }
             float sampledTime = interpolation;
             if (snapshotDeltaSeconds > 0.0f && predictionSeconds > 0.0f) {
-                sampledTime += predictionSeconds / snapshotDeltaSeconds;
+                sampledTime += predictionSeconds / predictionSampleDelta(snapshotDeltaSeconds);
             }
             float[] result = new float[4];
             dot = Math.clamp(dot, -1.0f, 1.0f);
@@ -245,6 +250,12 @@ public final class SkatePoseCache {
             if (magnitude < 1.0e-5f) return new float[] {0.0f, 0.0f, 0.0f, 1.0f};
             for (int i = 0; i < 4; i++) result[i] /= magnitude;
             return result;
+        }
+
+        private static float predictionSampleDelta(float snapshotDeltaSeconds) {
+            return snapshotDeltaSeconds > 0.0f
+                    ? Math.max(snapshotDeltaSeconds, MIN_PREDICTION_SAMPLE_SECONDS)
+                    : 0.0f;
         }
 
         public float yaw() {
