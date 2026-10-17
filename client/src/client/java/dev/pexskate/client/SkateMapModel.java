@@ -464,6 +464,10 @@ public final class SkateMapModel {
         }
     }
 
+    public static boolean hasActiveRetailMap(int entityId) {
+        return ACTIVE_MAP_SKATERS.contains(entityId);
+    }
+
     static void acceptPropTransforms(String filename, String propsSha256,
                                      List<SkateStatePayload.PropTransform> updates) {
         if (filename == null || filename.isBlank() || propsSha256 == null || propsSha256.isBlank()) return;

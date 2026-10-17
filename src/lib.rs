@@ -38,6 +38,11 @@ const COLLISION_BLOCKS_PER_TICK: usize = 1_024;
 const COLLISION_BLOCKS_GLOBAL_PER_TICK: usize = 2_048;
 const CLIENT_PROTOCOL_VERSION: u8 = 8;
 const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
+// Player teleports use Minecraft's acknowledged teleport-ID protocol. Keep
+// ordinary authoritative Skate movement in PlayerMoveEvent; only send a new
+// teleport when server-side position has drifted far enough to indicate a
+// discontinuity such as an engine checkpoint respawn.
+const PLAYER_TELEPORT_CORRECTION_DISTANCE_SQUARED: f64 = 4.0;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -49,6 +54,13 @@ fn supports_client_protocol(data: &[u8]) -> bool {
 
 fn sequence_is_newer(candidate: u32, previous: u32) -> bool {
     (candidate.wrapping_sub(previous) as i32) > 0
+}
+
+fn needs_player_teleport_correction(current: (f64, f64, f64), target: (f64, f64, f64)) -> bool {
+    let delta = [current.0 - target.0, current.1 - target.1, current.2 - target.2];
+    delta.iter().all(|value| value.is_finite())
+        && delta.iter().map(|value| value * value).sum::<f64>()
+            > PLAYER_TELEPORT_CORRECTION_DISTANCE_SQUARED
 }
 
 #[derive(Default)]
@@ -525,17 +537,45 @@ fn load_map_digests(data_root: &Path, map_path: &Path) -> Result<MapDigests, Str
     Ok(MapDigests { map, props })
 }
 
-/// Select a converted map deterministically. An optional settings/default-map.txt
-/// may name a map filename; otherwise prefer the main University district and
-/// then the first package in case-insensitive filename order.
+/// Select a converted Skate district only when explicitly requested. With no
+/// setting, Skate mode uses the player's current Minecraft world and sampled
+/// block collision.
 fn default_skate_map_path(data_root: &Path) -> Result<Option<PathBuf>, String> {
+    let selection_path = data_root.join("settings").join("default-map.txt");
+    let selection = match std::fs::read_to_string(&selection_path) {
+        Ok(selection) => Some(selection),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "could not read {}: {error}",
+                selection_path.display()
+            ));
+        }
+    };
+    let Some(selection) = selection else {
+        return Ok(None);
+    };
+    let selection = selection.trim();
+    if selection.is_empty() || selection.eq_ignore_ascii_case("minecraft") {
+        return Ok(None);
+    }
+    if Path::new(selection).components().count() != 1
+        || Path::new(selection).file_name().is_none()
+        || !selection.to_ascii_lowercase().ends_with(".skate")
+    {
+        return Err(format!(
+            "{} must contain 'minecraft' or one installed .skate map filename",
+            selection_path.display()
+        ));
+    }
     let maps_root = data_root.join("maps");
     let entries = match std::fs::read_dir(&maps_root) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Err(format!("{} is not installed in maps/", selection));
+        }
         Err(error) => return Err(format!("could not read {}: {error}", maps_root.display())),
     };
-    let mut maps = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| format!("could not inspect installed maps: {error}"))?;
         let kind = entry
@@ -546,58 +586,15 @@ fn default_skate_map_path(data_root: &Path) -> Result<Option<PathBuf>, String> {
                 .path()
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("skate"))
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(selection)
         {
-            maps.push(entry.path());
+            return Ok(Some(entry.path()));
         }
     }
-    maps.sort_by_key(|path| {
-        path.file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_ascii_lowercase()
-    });
-    if maps.is_empty() {
-        return Ok(None);
-    }
-
-    let selection_path = data_root.join("settings").join("default-map.txt");
-    match std::fs::read_to_string(&selection_path) {
-        Ok(selection) => {
-            let selection = selection.trim();
-            if !selection.is_empty() {
-                let filename = Path::new(selection).file_name();
-                if Path::new(selection).components().count() != 1 || filename.is_none() {
-                    return Err(format!(
-                        "{} must contain a single map filename",
-                        selection_path.display()
-                    ));
-                }
-                let selected = maps.iter().find(|path| {
-                    path.file_name()
-                        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(selection))
-                });
-                return selected
-                    .cloned()
-                    .map(Some)
-                    .ok_or_else(|| format!("{} is not installed in maps/", selection));
-            }
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!(
-                "could not read {}: {error}",
-                selection_path.display()
-            ));
-        }
-    }
-    Ok(maps
-        .iter()
-        .find(|path| {
-            path.file_stem()
-                .is_some_and(|stem| stem.to_string_lossy().eq_ignore_ascii_case("University"))
-        })
-        .cloned()
-        .or_else(|| maps.into_iter().next()))
+    Err(format!("{} is not installed in maps/", selection))
 }
 
 struct SkateInput;
@@ -1444,10 +1441,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
     }
 
     let current = player.get_position();
-    let dx = current.0 - root.0;
-    let dy = current.1 - root.1;
-    let dz = current.2 - root.2;
-    if dx * dx + dy * dy + dz * dz > 0.0001 {
+    if needs_player_teleport_correction(current, root) {
         player.teleport(
             root,
             Some(player.get_yaw()),
@@ -1798,6 +1792,7 @@ mod integration_tests {
         collision::CollisionScan,
         collision_refresh_needed, collision_work_order, encode_pose_payload, engine,
         initial_scan_recenter_needed,
+        needs_player_teleport_correction,
         physics::{Controls, decode_sequenced},
         player_collision_impact, prop_physics, sequence_is_newer, should_refresh_collision,
         shove_impact, shove_pressed_edge, supports_client_protocol, swept_player_collision_impact,
@@ -2041,7 +2036,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn map_selection_prefers_university_and_honors_safe_filename_override() {
+    fn minecraft_world_is_default_and_skate_maps_require_explicit_selection() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -2051,17 +2046,23 @@ mod integration_tests {
         std::fs::create_dir_all(&maps).unwrap();
         std::fs::write(maps.join("Mega Park.skate"), b"map").unwrap();
         std::fs::write(maps.join("University.skate"), b"map").unwrap();
+        assert_eq!(super::default_skate_map_path(&root).unwrap(), None);
+        std::fs::create_dir_all(root.join("settings")).unwrap();
+        std::fs::write(root.join("settings/default-map.txt"), "minecraft\n").unwrap();
+        assert_eq!(super::default_skate_map_path(&root).unwrap(), None);
+        std::fs::write(root.join("settings/default-map.txt"), "\n").unwrap();
         assert_eq!(
             super::default_skate_map_path(&root).unwrap(),
-            Some(maps.join("University.skate"))
+            None
         );
-        std::fs::create_dir_all(root.join("settings")).unwrap();
         std::fs::write(root.join("settings/default-map.txt"), "Mega Park.skate\n").unwrap();
         assert_eq!(
             super::default_skate_map_path(&root).unwrap(),
             Some(maps.join("Mega Park.skate"))
         );
         std::fs::write(root.join("settings/default-map.txt"), "../outside.skate\n").unwrap();
+        assert!(super::default_skate_map_path(&root).is_err());
+        std::fs::write(root.join("settings/default-map.txt"), "missing.skate\n").unwrap();
         assert!(super::default_skate_map_path(&root).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2125,6 +2126,22 @@ mod integration_tests {
         assert!(!sequence_is_newer(9, 10));
         assert!(sequence_is_newer(0, u32::MAX));
         assert!(!sequence_is_newer(u32::MAX, 0));
+    }
+
+    #[test]
+    fn normal_skate_motion_does_not_issue_repeated_player_teleports() {
+        assert!(!needs_player_teleport_correction(
+            (100.4, 64.0, -20.0),
+            (100.0, 64.0, -20.0),
+        ));
+        assert!(needs_player_teleport_correction(
+            (100.0, 64.0, -20.0),
+            (103.0, 64.0, -20.0),
+        ));
+        assert!(!needs_player_teleport_correction(
+            (f64::NAN, 64.0, -20.0),
+            (100.0, 64.0, -20.0),
+        ));
     }
 
     #[test]

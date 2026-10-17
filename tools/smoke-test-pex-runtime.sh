@@ -8,6 +8,16 @@ server_version=v1.0.0
 server_sha256=198ec31b4fb96ac51970ca5366691da2b44add2954ab55ee0bda446423ed50ba
 server_name=pumpkin-X64-Linux
 server_url="https://github.com/Conman1533/PEX/releases/download/${server_version}/${server_name}"
+spawn_protection=${PEX_SKATE_SMOKE_SPAWN_PROTECTION:-16}
+if [[ ! "$spawn_protection" =~ ^[0-9]+$ ]]; then
+  echo "PEX_SKATE_SMOKE_SPAWN_PROTECTION must be a non-negative integer" >&2
+  exit 2
+fi
+smoke_players=${PEX_SKATE_SMOKE_PLAYERS:-1}
+if [[ ! "$smoke_players" =~ ^[0-9]+$ ]] || (( 10#$smoke_players < 1 || 10#$smoke_players > 4 )); then
+  echo "PEX_SKATE_SMOKE_PLAYERS must be an integer from 1 through 4" >&2
+  exit 2
+fi
 work_dir=$(mktemp -d)
 server_pid=
 
@@ -30,18 +40,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-curl --fail --location --retry 3 --silent --show-error "$server_url" -o "$work_dir/$server_name"
-printf '%s  %s\n' "$server_sha256" "$work_dir/$server_name" | sha256sum --check --status
-chmod +x "$work_dir/$server_name"
-
-mkdir -p "$work_dir/plugins"
-cp "$plugin" "$work_dir/plugins/pex-skate.wasm"
+private_source=
 if [[ -n "$converted_data" ]]; then
   if [[ ! -d "$converted_data" ]]; then
     echo "Converted data folder does not exist: $converted_data" >&2
     exit 1
   fi
-  data_root="$work_dir/plugins/data/pex-skate"
   if [[ -d "$converted_data/assets/private" ]]; then
     private_source="$converted_data/assets/private"
   elif [[ -d "$converted_data/private" ]]; then
@@ -50,9 +54,27 @@ if [[ -n "$converted_data" ]]; then
     echo "Converted data folder needs assets/private/ or private/" >&2
     exit 1
   fi
+  if [[ ! -f "$private_source/stock/data/config/input.cfg" ]]; then
+    echo "Converted data folder is missing the Skate engine files under stock/data; a client-only config/pex-skate folder is not sufficient." >&2
+    exit 1
+  fi
+fi
+
+curl --fail --location --retry 3 --silent --show-error "$server_url" -o "$work_dir/$server_name"
+printf '%s  %s\n' "$server_sha256" "$work_dir/$server_name" | sha256sum --check --status
+chmod +x "$work_dir/$server_name"
+
+mkdir -p "$work_dir/plugins"
+cp "$plugin" "$work_dir/plugins/pex-skate.wasm"
+if [[ -n "$converted_data" ]]; then
+  data_root="$work_dir/plugins/data/pex-skate"
   mkdir -p "$data_root/private"
   cp -a "$private_source/." "$data_root/private/"
-  for entry in maps props settings maps.json; do
+  optional_data=(maps props settings maps.json)
+  if [[ "${PEX_SKATE_SMOKE_MAP:-}" == "minecraft" ]]; then
+    optional_data=(settings)
+  fi
+  for entry in "${optional_data[@]}"; do
     if [[ -e "$converted_data/$entry" ]]; then
       cp -a "$converted_data/$entry" "$data_root/"
     fi
@@ -61,7 +83,9 @@ fi
 plugin_sha256=$(sha256sum "$work_dir/plugins/pex-skate.wasm" | cut -d ' ' -f 1)
 printf '{"entries":{"%s":{"permissions_requested":["fs.read.data"],"approved":true}}}\n' \
   "$plugin_sha256" > "$work_dir/plugins/permission_cache.json"
-cat > "$work_dir/pumpkin.toml" <<'EOF'
+cat > "$work_dir/pumpkin.toml" <<EOF
+spawn_protection = $spawn_protection
+
 [networking.java]
 online_mode = false
 encryption = false
@@ -111,6 +135,29 @@ start_server() {
   fi
 }
 
+run_smoke_players() {
+  local exercise_skate=$1
+  local exercise_timeout=${2:-}
+  local player_index
+  local player_pid
+  local player_failed=0
+  local -a player_pids=()
+  for ((player_index = 1; player_index <= smoke_players; player_index++)); do
+    local -a player_args=(--username "PexSkateSmoke${player_index}")
+    if [[ "$exercise_skate" == true ]]; then
+      player_args+=(--exercise-skate --exercise-timeout "$exercise_timeout")
+    fi
+    python3 "$script_dir/test_pex_payload_client.py" "${player_args[@]}" &
+    player_pids+=("$!")
+  done
+  for player_pid in "${player_pids[@]}"; do
+    if ! wait "$player_pid"; then
+      player_failed=1
+    fi
+  done
+  return "$player_failed"
+}
+
 run_server_smoke() {
   local map_name=${1:-}
   if [[ -n "$map_name" ]]; then
@@ -121,19 +168,19 @@ run_server_smoke() {
   start_server
   if [[ -n "$converted_data" ]]; then
     local exercise_timeout=${PEX_SKATE_SMOKE_TIMEOUT_SECONDS:-180}
-    if ! python3 "$script_dir/test_pex_payload_client.py" --exercise-skate --exercise-timeout "$exercise_timeout"; then
+    if ! run_smoke_players true "$exercise_timeout"; then
       tail -n 12 server.log | cut -c1-1200
       return 1
     fi
     python3 "$script_dir/check_pex_status.py"
-    echo "PEX $server_version loaded ${map_name:-the default Skate map}, activated an engine session, consumed client controls, and passed the status handshake."
+    echo "PEX $server_version loaded ${map_name:-the default Skate map}, activated $smoke_players engine session(s), consumed client controls, and passed the status handshake."
   else
-    if ! python3 "$script_dir/test_pex_payload_client.py"; then
+    if ! run_smoke_players false; then
       tail -n 40 server.log
       return 1
     fi
     python3 "$script_dir/check_pex_status.py"
-    echo "PEX $server_version loaded pex-skate.wasm, accepted an offline Minecraft 26.3 player, acknowledged the PEX Skate payload, and passed the status handshake."
+    echo "PEX $server_version loaded pex-skate.wasm, accepted $smoke_players offline Minecraft 26.3 player(s), acknowledged the PEX Skate payload, and passed the status handshake."
   fi
   if [[ "${PEX_SKATE_SMOKE_KEEP_SERVER:-0}" == "1" ]]; then
     echo "Leaving the disposable PEX server running for a manual client check (pid $server_pid); press Ctrl+C to stop it."

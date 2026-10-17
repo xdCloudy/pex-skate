@@ -99,9 +99,15 @@ public final class SkateSkaterModel {
             }
         }
         for (Primitive primitive : current.primitives) {
-            RenderType renderType = primitive.translucent
-                    ? RenderTypes.entityTranslucent(primitive.texture)
-                    : RenderTypes.entityCutoutCull(primitive.texture);
+            RenderType renderType = switch (primitive.alphaMode) {
+                // GLTF OPAQUE materials must ignore the source image alpha
+                // channel. Several Skate 3 textures store packed data there;
+                // running them through a cutout shader made the skater and
+                // board render as sparse, flickering fragments.
+                case OPAQUE -> RenderTypes.entitySolid(primitive.texture);
+                case MASK -> RenderTypes.entityCutoutCull(primitive.texture);
+                case BLEND -> RenderTypes.entityTranslucent(primitive.texture);
+            };
             collector.submitCustomGeometry(matrices, renderType, (stackPose, vertices) ->
                     primitive.draw(stackPose, vertices, jointPoints, jointRotations,
                             camera, inversePose, inverseNormal, light, overlay));
@@ -153,6 +159,25 @@ public final class SkateSkaterModel {
         if (inverseBinds.length != joints.size() * 16) throw new IOException("GLB inverse bind matrix count does not match its joints");
 
         JsonArray imageDefinitions = array(document, "images");
+        JsonArray gltfTextures = array(document, "textures");
+        JsonArray materials = array(document, "materials");
+        boolean[] opaqueImage = new boolean[imageDefinitions.size()];
+        boolean[] nonOpaqueImage = new boolean[imageDefinitions.size()];
+        for (JsonElement materialElement : materials) {
+            JsonObject material = materialElement.getAsJsonObject();
+            JsonObject pbr = material.getAsJsonObject("pbrMetallicRoughness");
+            if (pbr == null || !pbr.has("baseColorTexture")) continue;
+            int textureIndex = pbr.getAsJsonObject("baseColorTexture").get("index").getAsInt();
+            if (textureIndex < 0 || textureIndex >= gltfTextures.size()) {
+                throw new IOException("GLB material references an invalid texture");
+            }
+            int imageIndex = gltfTextures.get(textureIndex).getAsJsonObject().get("source").getAsInt();
+            if (imageIndex < 0 || imageIndex >= imageDefinitions.size()) {
+                throw new IOException("GLB texture references an invalid image");
+            }
+            if (alphaMode(material) == AlphaMode.OPAQUE) opaqueImage[imageIndex] = true;
+            else nonOpaqueImage[imageIndex] = true;
+        }
         List<Identifier> imageIds = new ArrayList<>();
         Minecraft client = Minecraft.getInstance();
         for (int i = 0; i < imageDefinitions.size(); i++) {
@@ -164,14 +189,15 @@ public final class SkateSkaterModel {
             byte[] bytes = new byte[encoded.remaining()];
             encoded.get(bytes);
             NativeImage pixels = NativeImage.read(bytes);
+            // GLTF requires alpha to be ignored for OPAQUE materials. Some
+            // Skate 3 exports pack auxiliary maps into the PNG alpha channel.
+            if (opaqueImage[i] && !nonOpaqueImage[i]) forceOpaque(pixels);
             Identifier id = Identifier.fromNamespaceAndPath("pexskate", "skater/image_" + i);
             client.getTextureManager().register(id, new DynamicTexture(() -> "PEX Skate skater image " + imageNumber, pixels));
             TEXTURES.add(id);
             imageIds.add(id);
         }
 
-        JsonArray gltfTextures = array(document, "textures");
-        JsonArray materials = array(document, "materials");
         JsonArray gltfMeshes = array(document, "meshes");
         if (gltfMeshes.isEmpty()) throw new IOException("GLB has no mesh");
         List<Primitive> primitives = new ArrayList<>();
@@ -214,10 +240,10 @@ public final class SkateSkaterModel {
             int materialIndex = primitive.has("material") ? primitive.get("material").getAsInt() : -1;
             Identifier texture = null;
             float[] tint = {1.0f, 1.0f, 1.0f, 1.0f};
-            boolean translucent = false;
+            AlphaMode alphaMode = AlphaMode.OPAQUE;
             if (materialIndex >= 0) {
                 JsonObject material = materials.get(materialIndex).getAsJsonObject();
-                translucent = material.has("alphaMode") && material.get("alphaMode").getAsString().equals("BLEND");
+                alphaMode = alphaMode(material);
                 JsonObject pbr = material.getAsJsonObject("pbrMetallicRoughness");
                 if (pbr != null) {
                     if (pbr.has("baseColorFactor")) tint = floats(pbr.getAsJsonArray("baseColorFactor"));
@@ -232,7 +258,7 @@ public final class SkateSkaterModel {
             for (int i = 0; i < tint.length; i++) tint[i] = Math.clamp(tint[i], 0.0f, 1.0f);
             if (texture == null) texture = registerWhiteTexture(client);
             primitives.add(new Primitive(positions, normals, uv, weights, vertexJoints, indices,
-                    jointSlots, inverseBinds, texture, tint, translucent));
+                    jointSlots, inverseBinds, texture, tint, alphaMode));
         }
         if (primitives.isEmpty()) throw new IOException("GLB contains no renderable triangles");
         return new Model(List.copyOf(primitives));
@@ -247,6 +273,23 @@ public final class SkateSkaterModel {
             TEXTURES.add(id);
         }
         return id;
+    }
+
+    private static AlphaMode alphaMode(JsonObject material) throws IOException {
+        if (!material.has("alphaMode")) return AlphaMode.OPAQUE;
+        try {
+            return AlphaMode.valueOf(material.get("alphaMode").getAsString());
+        } catch (IllegalArgumentException error) {
+            throw new IOException("GLB material has an unsupported alpha mode", error);
+        }
+    }
+
+    private static void forceOpaque(NativeImage image) {
+        for (int y = 0; y < image.getHeight(); y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                image.setPixel(x, y, image.getPixel(x, y) | 0xff000000);
+            }
+        }
     }
 
     private static JsonArray array(JsonObject object, String key) throws IOException {
@@ -341,22 +384,23 @@ public final class SkateSkaterModel {
 
     private record Model(List<Primitive> primitives) {}
     private record Accessor(int view, int offset, int stride, int count, int componentType) {}
+    private enum AlphaMode { OPAQUE, MASK, BLEND }
 
     private static final class Primitive {
         private final float[] positions, normals, uv, weights, inverseBinds, tint;
         private final int[] vertexJoints, indices, jointSlots;
         private final Identifier texture;
-        private final boolean translucent;
+        private final AlphaMode alphaMode;
         private final float[] skinnedPositions;
         private final float[] skinnedNormals;
 
         private Primitive(float[] positions, float[] normals, float[] uv, float[] weights, int[] vertexJoints,
                           int[] indices, int[] jointSlots, float[] inverseBinds, Identifier texture,
-                          float[] tint, boolean translucent) {
+                          float[] tint, AlphaMode alphaMode) {
             this.positions = positions; this.normals = normals; this.uv = uv; this.weights = weights;
             this.vertexJoints = vertexJoints; this.indices = indices; this.jointSlots = jointSlots;
             this.inverseBinds = inverseBinds; this.texture = texture; this.tint = tint;
-            this.translucent = translucent;
+            this.alphaMode = alphaMode;
             this.skinnedPositions = new float[positions.length];
             this.skinnedNormals = new float[normals.length];
         }

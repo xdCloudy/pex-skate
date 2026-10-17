@@ -37,7 +37,7 @@ jobs:
       - name: Test Minecraft status handshake client
         run: python3 -m unittest discover -s tools/tests -v
       - name: Smoke test plugin in the pinned PEX server runtime
-        run: bash ./tools/smoke-test-pex-runtime.sh target/wasm32-wasip2/release/pex_skate.wasm
+        run: PEX_SKATE_SMOKE_PLAYERS=2 bash ./tools/smoke-test-pex-runtime.sh target/wasm32-wasip2/release/pex_skate.wasm
       - name: Build Fabric client companion
         working-directory: client
         run: bash ./gradlew build
