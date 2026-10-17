@@ -320,7 +320,7 @@ public final class SkateMapModel {
             int texture = primitive.textureIndex == 0 ? 0 : primitive.textureIndex + textureOffset;
             primitives.add(new PendingPrimitive(primitive.positions, primitive.normals, primitive.uv,
                     primitive.vertexIndirectLight, primitive.indices, primitive.bounds, texture, primitive.color,
-                    primitive.alphaMode, primitive.propInstanceId));
+                    primitive.emissive, primitive.alphaMode, primitive.propInstanceId));
         }
         return new ParsedModel(district.filename, district.mapName, district.mapSha256, props.mapSha256,
                 List.copyOf(textures), List.copyOf(primitives), district.lights, district.sky, memoryEstimate);
@@ -442,7 +442,7 @@ public final class SkateMapModel {
             for (PendingPrimitive primitive : task.parsed.primitives) {
                 primitives.add(new Primitive(primitive.positions, primitive.normals, primitive.uv,
                         primitive.vertexIndirectLight, primitive.indices, primitive.bounds,
-                        task.textureIds[primitive.textureIndex], primitive.color, primitive.alphaMode,
+                        task.textureIds[primitive.textureIndex], primitive.color, primitive.emissive, primitive.alphaMode,
                         primitive.propInstanceId,
                         task.parsed.lights, sky));
             }
@@ -531,7 +531,8 @@ public final class SkateMapModel {
     private static void submitPrimitive(LevelRenderContext context, PoseStack matrices, Minecraft client,
                                         Primitive primitive, boolean translucent, PropTransformSample offset) {
         BlockPos lightPosition = primitive.lightSamplePosition(offset);
-        int light = client.level.getBrightness(LightLayer.SKY, lightPosition) << 20
+        int light = primitive.emissive >= 1.0f ? 0xF000F0
+                : client.level.getBrightness(LightLayer.SKY, lightPosition) << 20
                 | client.level.getBrightness(LightLayer.BLOCK, lightPosition) << 4;
         context.submitNodeCollector().submitCustomGeometry(
                 matrices, translucent ? RenderTypes.entityTranslucent(primitive.texture)
@@ -602,6 +603,7 @@ public final class SkateMapModel {
         long[] materialNormalMaps = new long[materialCount];
         int[] materialAlphaModes = new int[materialCount];
         float[] materialLightmapStrengths = new float[materialCount];
+        float[] materialEmissives = new float[materialCount];
         float[][] materialColors = new float[materialCount][4];
         for (int i = 0; i < materialCount; i++) {
             String materialName = reader.string();
@@ -612,7 +614,10 @@ public final class SkateMapModel {
             materialColors[i][1] = reader.f32();
             materialColors[i][2] = reader.f32();
             materialColors[i][3] = 1.0f;
-            reader.skipFloats(2); // roughness and emissive
+            reader.skipFloats(1); // roughness
+            float emissive = reader.f32();
+            if (!Float.isFinite(emissive)) throw new IOException("SKATE material has a non-finite emissive value");
+            materialEmissives[i] = Math.clamp(emissive, 0.0f, 1.0f);
             materialTextures[i] = reader.u32(); // albedo texture, one-based
             materialLightmaps[i] = reader.u32(); // baked indirect-light texture, one-based
             materialNormalMaps[i] = reader.u32();
@@ -727,7 +732,7 @@ public final class SkateMapModel {
             int[] materialIndices = entry.getValue().toArray();
             primitives.add(new PendingPrimitive(positions, normals, uv, vertexIndirectLight,
                     materialIndices, primitiveBounds(positions, materialIndices), texture, materialColors[material],
-                    materialAlphaModes[material], materialPropIds[material]));
+                    materialEmissives[material], materialAlphaModes[material], materialPropIds[material]));
         }
         skipRails(reader, railCount);
         skipDoors(reader, doorCount, 14);
@@ -969,6 +974,11 @@ public final class SkateMapModel {
         return (texture.rgba[(y * texture.width + x) * 4 + channel] & 255) / 255.0f;
     }
 
+    static float emissiveMix(float lit, float albedo, float emissive) {
+        float strength = Math.clamp(emissive, 0.0f, 1.0f);
+        return lit * (1.0f - strength) + albedo * strength;
+    }
+
     /** Applies the retail tangent-space normal at each vertex for the renderer's vertex-lighting pass. */
     static void applyVertexNormalMap(float[] normals, int normalOffset, float u, float v, TextureData texture,
                                      byte binormalX, byte binormalY, byte binormalZ, byte handedness) {
@@ -1090,7 +1100,7 @@ public final class SkateMapModel {
     }
     private record PendingPrimitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight,
                                     int[] indices, float[] bounds,
-                                    int textureIndex, float[] color, int alphaMode, long propInstanceId) {}
+                                    int textureIndex, float[] color, float emissive, int alphaMode, long propInstanceId) {}
     private record PropInstanceKey(String filename, String propsSha256, long identity) {}
     private record ChunkMaterial(int material, int x, int z) {}
 
@@ -1177,12 +1187,13 @@ public final class SkateMapModel {
         private final float[] bounds;
         private final int alphaMode;
         private final long propInstanceId;
+        private final float emissive;
         private final List<AuthoredLight> lights;
         private final float[] sunDirection;
         private final float sunIntensity;
 
         private Primitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight, int[] indices,
-                          float[] bounds, Identifier texture, float[] color, int alphaMode,
+                          float[] bounds, Identifier texture, float[] color, float emissive, int alphaMode,
                           long propInstanceId,
                           List<AuthoredLight> authoredLights, Sky sky) {
             this.positions = positions;
@@ -1192,6 +1203,7 @@ public final class SkateMapModel {
             this.indices = indices;
             this.texture = texture;
             this.color = color.clone();
+            this.emissive = Math.clamp(emissive, 0.0f, 1.0f);
             this.bounds = bounds;
             this.alphaMode = alphaMode;
             this.propInstanceId = propInstanceId;
@@ -1281,12 +1293,13 @@ public final class SkateMapModel {
                     normal.z = -sinYaw * normalX + cosYaw * normalZ;
                 }
                 pose.normal().transform(normal).normalize();
-                float red = color[0] * vertexIndirectLight[point];
-                float green = color[1] * vertexIndirectLight[point + 1];
-                float blue = color[2] * vertexIndirectLight[point + 2];
+                float red = emissiveMix(color[0] * vertexIndirectLight[point], color[0], emissive);
+                float green = emissiveMix(color[1] * vertexIndirectLight[point + 1], color[1], emissive);
+                float blue = emissiveMix(color[2] * vertexIndirectLight[point + 2], color[2], emissive);
                 if (sunDirection != null) {
                     float sun = Math.max(0.0f, normal.x * sunDirection[0]
-                            + normal.y * sunDirection[1] + normal.z * sunDirection[2]) * sunIntensity;
+                            + normal.y * sunDirection[1] + normal.z * sunDirection[2]) * sunIntensity
+                            * (1.0f - emissive);
                     red += sun;
                     green += sun;
                     blue += sun;
@@ -1312,7 +1325,7 @@ public final class SkateMapModel {
                         }
                         float diffuse = Math.max(0.0f, (float) (normal.x * dx
                                 + normal.y * dy + normal.z * dz) / (float) distance);
-                        float amount = attenuation * diffuse;
+                        float amount = attenuation * diffuse * (1.0f - emissive);
                         red += authored.color[0] * amount;
                         green += authored.color[1] * amount;
                         blue += authored.color[2] * amount;
