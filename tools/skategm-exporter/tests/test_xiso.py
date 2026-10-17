@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from xiso import DIRECTORY, MAGIC, SECTOR, Xiso, XisoError, extract_files, extract_matching
+from convert import extract_optional_disc_files
 
 
 def make_entry(name, sector, size, attributes=0):
@@ -66,7 +67,8 @@ class XisoTests(unittest.TestCase):
                 ("createacharacter.big", 54, 3, 0),
                 ("worldDIST_University.big", 55, 4, 0),
                 ("worldDIST_Industrial.big", 56, 4, 0),
-                ("unrelated.bin", 57, 3, 0),
+                ("worlddmo.big", 57, 3, 0),
+                ("unrelated.bin", 58, 3, 0),
             ])
         directories = {
             41: make_directory([
@@ -87,7 +89,7 @@ class XisoTests(unittest.TestCase):
             image[start:start + len(directory)] = directory
         for sector, content in {
             50: b"load", 51: b"boot", 52: b"db!", 53: b"anim",
-            54: b"cac", 55: b"univ", 56: b"indu", 57: b"no!",
+            54: b"cac", 55: b"univ", 56: b"indu", 57: b"dmo", 58: b"no!",
         }.items():
             start = sector * SECTOR
             image[start:start + len(content)] = content
@@ -127,6 +129,9 @@ class XisoTests(unittest.TestCase):
             output,
         )
         maps = extract_matching(self.image_path, "data/content", "worldDIST_*.big", output)
+        optional = extract_optional_disc_files(
+            self.image_path, ["data/content/worlddmo.big"], output
+        )
 
         self.assertEqual(
             files,
@@ -144,7 +149,20 @@ class XisoTests(unittest.TestCase):
         )
         self.assertEqual((output / "data/anim/skater.abk").read_bytes(), b"anim")
         self.assertEqual((output / "data/content/worldDIST_University.big").read_bytes(), b"univ")
+        self.assertEqual(optional, ["data/content/worlddmo.big"])
+        self.assertEqual((output / "data/content/worlddmo.big").read_bytes(), b"dmo")
         self.assertFalse((output / "data/content/unrelated.bin").exists())
+
+    def test_optional_disc_file_does_not_fail_when_absent(self):
+        self.write_image([make_entry("readme.txt", 41, 5)])
+        output = Path(self.temp.name) / "optional"
+
+        self.assertEqual(
+            extract_optional_disc_files(
+                self.image_path, ["data/content/worlddmo.big"], output
+            ),
+            [],
+        )
 
     def test_rejects_path_traversal_names(self):
         self.write_image([make_entry("../outside", 41, 5)])

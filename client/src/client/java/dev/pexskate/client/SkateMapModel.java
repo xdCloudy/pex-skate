@@ -53,7 +53,7 @@ public final class SkateMapModel {
     private static final int CAMERA_CELL_SIZE = 64;
     private static final long MAX_CAMERA_CELLS_PER_PRIMITIVE = 64L;
     private static final long MAX_CAMERA_QUERY_CELLS = 128L;
-    private static final long MAX_TEXTURE_PIXELS = 96_000_000L;
+    private static final long MAX_TEXTURE_PIXELS = 256_000_000L;
     private static final long LOAD_RETRY_COOLDOWN_NANOS = 5_000_000_000L;
     private static final long PROP_INTERPOLATION_NANOS = 50_000_000L;
     private static final double DRAW_DISTANCE = 256.0;
@@ -387,7 +387,7 @@ public final class SkateMapModel {
         }
     }
 
-    private static ParsedModel mergeProps(ParsedModel district, ParsedModel props) throws IOException {
+    static ParsedModel mergeProps(ParsedModel district, ParsedModel props) throws IOException {
         if (props.sky != null) throw new IOException("authored district prop package unexpectedly contains a sky");
         long memoryEstimate = district.memoryEstimate + props.memoryEstimate;
         if (memoryEstimate > Runtime.getRuntime().maxMemory() / 2) {
@@ -703,9 +703,9 @@ public final class SkateMapModel {
             materialEmissives[i] = Math.clamp(emissive, 0.0f, 1.0f);
             materialTextures[i] = reader.u32(); // albedo texture, one-based
             materialLightmaps[i] = reader.u32(); // baked indirect-light texture, one-based
+            materialLightmapStrengths[i] = Math.clamp(reader.f32(), 0.0f, 1.0f);
             materialNormalMaps[i] = reader.u32();
             reader.skipU32(2); // ORM, emissive
-            materialLightmapStrengths[i] = Math.clamp(reader.f32(), 0.0f, 1.0f);
             long alphaMode = reader.u32();
             if (alphaMode > 2) throw new IOException("SKATE material has an unsupported alpha mode");
             materialAlphaModes[i] = (int) alphaMode;

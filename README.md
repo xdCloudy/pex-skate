@@ -6,6 +6,8 @@ This is an experimental integration and is **not production-ready**. The PEX ser
 
 Nearby Skate sessions in the same dimension and converted district now contribute a lightweight body column and oriented board proxy to each other’s Skate collision world. These proxies are refreshed independently of the authored prop mesh. High-speed board-to-rider contacts use a swept check between consecutive authoritative poses before triggering SkateGM’s knockdown response, with a per-pair cooldown to prevent repeated hits while contact continues; shove input keeps its separate explicit knockdown action. This multiplayer collision path is covered by unit tests but has not been validated in a live server/client session, and the simplified contact check is not a full two-player rigid-body solver.
 
+Allocate at least 4 GiB of Java heap for large districts such as University. Parsing the map and its authored prop package together needs over 1 GiB temporarily. If a district references DMO templates absent from the supplied game archive, the converter skips those prop instances and records them in its per-map report.
+
 ## What already exists to build on
 
 The key heavy lifting comes from [SkateGM](https://github.com/the-schwilliam/SkateGM), which packages the Rust engine in a small renderer-free `skate-host` crate. That host successfully builds for PEX's `wasm32-wasip2` target, so this mod runs the real simulation instead of recreating skate physics. SkateGM also provides a user-owned Skate 3 asset conversion workflow. The native GMod renderer and multiplayer addon are not used by this project.
@@ -18,6 +20,7 @@ The PEX plugin API/WIT and the SkateGM engine/data/host crates are vendored at p
 
 - PEX/Pumpkin **Minecraft 26.3**, using the plugin API revision pinned in `Cargo.toml`.
 - A Java Edition Minecraft 26.3 client with Fabric Loader 0.19.5+, Fabric API 0.162.0+26.3, and Java 25+.
+- At least 4 GiB of Java heap for large converted districts such as University.
 - Rust stable with the `wasm32-wasip2` target to build the server plugin.
 - JDK 25+ to build the client jar.
 - A legally obtained Skate 3 Xbox 360 ISO if you plan to use the skating engine. The release's Windows helper converts it locally; no game files are supplied here.

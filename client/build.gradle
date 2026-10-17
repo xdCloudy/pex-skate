@@ -43,6 +43,9 @@ tasks.named('compileTestJava') {
 
 tasks.withType(Test).configureEach {
     useJUnitPlatform()
+    if (providers.environmentVariable("PEX_SKATE_INTEGRATION_MAP").isPresent()) {
+        maxHeapSize = "4G"
+    }
 }
 
 def modVersion = project.version.toString()

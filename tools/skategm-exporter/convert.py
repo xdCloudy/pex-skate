@@ -42,6 +42,22 @@ def run_task(script, args):
 
 HUD = ['data/big/fedata.big', 'data/big/fetexture.big', 'data/big/miscboot.big']
 FROM_DISC = list(dict.fromkeys(['default.xex', 'data/anim', *REQUIRED, *HUD]))
+OPTIONAL_FROM_DISC = ['data/content/worlddmo.big']
+
+
+def extract_optional_disc_files(xex, paths, destination, report=None):
+    """Extract optional owned-disc files without failing on editions that omit them."""
+    import xiso
+    extracted = []
+    for path in paths:
+        try:
+            extracted.extend(xiso.extract_files(xex, [path], destination))
+        except xiso.XisoError as error:
+            if str(error) != 'not on the disc: ' + path:
+                raise
+            if report:
+                report('Optional disc file unavailable: ' + path)
+    return extracted
 
 
 def convert(xex, out):
@@ -54,6 +70,10 @@ def convert(xex, out):
             print('Reading the files it needs from your disc image', flush=True)
             try:
                 xiso.extract_files(xex, FROM_DISC, disc, lambda text: print(text, flush=True))
+                extract_optional_disc_files(
+                    xex, OPTIONAL_FROM_DISC, disc,
+                    lambda text: print(text, flush=True),
+                )
                 xiso.extract_matching(
                     xex, 'data/content', 'worldDIST_*.big', disc,
                     lambda text: print(text, flush=True),
@@ -195,6 +215,14 @@ def convert_game(game, out):
             raise RuntimeError('No Skate 3 worldDIST_*.big map archives were found in data/content.')
         report(f'Converting {len(archives)} Skate 3 map archives')
         from tools.asset_pipeline.install import convert_map
+        from tools.asset_pipeline.dynamic_props import prepare_catalog
+        from tools.asset_pipeline.optional_content import CONTENT_ERRORS, note
+        try:
+            report('Preparing authored movable-object models')
+            prepare_catalog(game, work / 'maps' / 'dmo')
+        except CONTENT_ERRORS as error:
+            note(stage / 'assets/private/native-props/props-availability.json',
+                 'Movable props', error, report=report)
         maps_dir = stage / 'maps'
         maps_dir.mkdir(parents=True, exist_ok=True)
         checker = map_checker_executable()

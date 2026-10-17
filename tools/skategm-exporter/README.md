@@ -19,9 +19,12 @@ material mass or hinged doors. `<Map>.collision` remains as a bounded
 compatibility/fallback package. `maps.json` records and hashes each available
 package.
 
-The ISO mode reads the required files and `data/content/worldDIST_*.big` map
-archives from the disc image into a temporary folder, converts them, then removes
-that temporary extraction. The XDVDFS
+The ISO mode reads the required files, `data/content/worldDIST_*.big` map
+archives, and optional `data/content/worlddmo.big` movable-object catalog from
+the disc image into a temporary folder, converts them, then removes that
+temporary extraction. When the optional DMO archive is present, its renderable
+placements and collision meshes are exported; unresolved template IDs are
+reported per map. The XDVDFS
 reader checks image extents, rejects unsafe filenames, and bounds directory
 size/depth before extracting. Nothing is downloaded by the exporter and no game
 files are included here.

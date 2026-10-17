@@ -4,12 +4,51 @@ import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class SkateMapPackageParseTest {
+    @Test
+    void parsesConvertedIsoMapWhenConfigured() throws IOException {
+        String configuredMaps = System.getProperty("pex.skate.integration.map",
+                System.getenv("PEX_SKATE_INTEGRATION_MAP"));
+        assumeTrue(configuredMaps != null && !configuredMaps.isBlank(), "No converted ISO map configured");
+
+        for (String mapPath : configuredMaps.split(Pattern.quote(File.pathSeparator))) {
+            Path path = Path.of(mapPath);
+            SkateMapModel.ParsedModel parsed = SkateMapModel.parse(
+                    Files.readAllBytes(path), path.getFileName().toString());
+
+            assertFalse(parsed.mapName().isBlank(), path.toString());
+            assertFalse(parsed.textures().isEmpty(), path.toString());
+            assertFalse(parsed.primitives().isEmpty(), path.toString());
+            assertTrue(parsed.primitives().stream().anyMatch(primitive -> primitive.indices().length >= 3),
+                    path.toString());
+
+            Path propsPath = path.getParent().getParent().resolve("assets/private/native-props")
+                    .resolve(path.getFileName());
+            if (Files.isRegularFile(propsPath)) {
+                SkateMapModel.ParsedModel props = SkateMapModel.parse(
+                        Files.readAllBytes(propsPath), path.getFileName() + "-props");
+                assertFalse(props.primitives().isEmpty(), propsPath.toString());
+                assertTrue(props.primitives().stream().anyMatch(primitive -> primitive.propInstanceId() != 0),
+                        propsPath.toString());
+                SkateMapModel.ParsedModel merged = SkateMapModel.mergeProps(parsed, props);
+                assertEquals(parsed.primitives().size() + props.primitives().size(), merged.primitives().size());
+            }
+            System.gc();
+        }
+    }
+
     @Test
     void parsesAuthoredMaterialAndTangentFrameFromSkate14Package() throws IOException {
         SkateMapModel.ParsedModel parsed = SkateMapModel.parse(syntheticMap(), "synthetic.skate");
@@ -46,9 +85,9 @@ class SkateMapPackageParseTest {
         f32(output, 0.68f); f32(output, 1.0f);
         u32(output, 1); // albedo texture
         u32(output, 0); // baked lightmap
+        f32(output, 0.0f); // lightmap strength
         u32(output, 2); // normal map
         u32(output, 0); u32(output, 0); // ORM and emissive textures
-        f32(output, 0.0f); // lightmap strength
         u32(output, 0); // opaque alpha mode
         f32(output, 0.5f); // alpha cutoff
         u32(output, 0); u32(output, 0); u32(output, 0); // material behavior IDs
