@@ -641,7 +641,7 @@ public final class SkateMapModel {
         model = null;
     }
 
-    private static ParsedModel parse(byte[] file, String filename) throws IOException {
+    static ParsedModel parse(byte[] file, String filename) throws IOException {
         String mapSha256 = sha256(file);
         Reader reader = new Reader(file);
         byte[] magic = reader.take(8);
@@ -1254,10 +1254,10 @@ public final class SkateMapModel {
     }
     public record FogSettings(float near, float far, float power, float maximum,
                               float red, float green, float blue) {}
-    private record ParsedModel(String filename, String mapName, String mapSha256, String propsSha256,
-                               List<TextureData> textures,
-                               List<PendingPrimitive> primitives, List<AuthoredLight> lights,
-                               PendingSky sky, long memoryEstimate) {}
+    record ParsedModel(String filename, String mapName, String mapSha256, String propsSha256,
+                       List<TextureData> textures,
+                       List<PendingPrimitive> primitives, List<AuthoredLight> lights,
+                       PendingSky sky, long memoryEstimate) {}
     private record AuthoredLight(int kind, Vec3 position, Vec3 direction, float[] color,
                                  float intensity, float range, float radius,
                                  float innerCos, float outerCos) {}
@@ -1277,9 +1277,9 @@ public final class SkateMapModel {
             this.rgba = rgba;
         }
     }
-    private record PendingPrimitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight,
-                                    int[] indices, float[] bounds,
-                                    int textureIndex, float[] color, float emissive, int alphaMode, long propInstanceId) {}
+    record PendingPrimitive(float[] positions, float[] normals, float[] uv, float[] vertexIndirectLight,
+                            int[] indices, float[] bounds,
+                            int textureIndex, float[] color, float emissive, int alphaMode, long propInstanceId) {}
     private record PropInstanceKey(String filename, String propsSha256, long identity) {}
     private record ChunkMaterial(int material, int x, int z) {}
 

@@ -11,6 +11,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Frame-consistent prop rendering with one sampled transform per instance per render frame.
 - Fabric client controls, board/skater presentation, and map rendering.
 - Converted normal maps contribute tangent-frame-aware per-vertex diffuse lighting.
+- The client map loader has a synthetic SKATE14 package regression fixture covering authored materials, tangent-space normal mapping, and triangle intersection parsing without requiring game assets.
 - Incandescent and unlit retail materials preserve their base albedo as emissive light.
 - The Skate chase camera clips against converted district triangles and moving props as well as Minecraft blocks.
 - Camera obstruction queries use a spatial index so static district meshes outside the camera segment are skipped.
