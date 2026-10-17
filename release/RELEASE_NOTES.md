@@ -10,6 +10,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Fabric v9 control encoding now has a shared golden packet decoded by the Rust server path, covering trick axes, triggers, action bits, modifiers and sequence decoding.
 - Frame-consistent prop rendering with one sampled transform per instance per render frame.
 - Fabric client controls, board/skater presentation, and map rendering.
+- Converted normal maps contribute tangent-frame-aware per-vertex diffuse lighting.
 - Portable PEX WebAssembly plugin and Windows ISO conversion/setup helper.
 - Keyboard and standard gamepad controls for skating and tricks.
 - Active Skate key bindings no longer trigger overlapping Minecraft drop, inventory or sneak actions; unrelated rebound Minecraft controls remain available.

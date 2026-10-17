@@ -599,6 +599,7 @@ public final class SkateMapModel {
         long[] materialTextures = new long[materialCount];
         long[] materialPropIds = new long[materialCount];
         long[] materialLightmaps = new long[materialCount];
+        long[] materialNormalMaps = new long[materialCount];
         int[] materialAlphaModes = new int[materialCount];
         float[] materialLightmapStrengths = new float[materialCount];
         float[][] materialColors = new float[materialCount][4];
@@ -614,7 +615,8 @@ public final class SkateMapModel {
             reader.skipFloats(2); // roughness and emissive
             materialTextures[i] = reader.u32(); // albedo texture, one-based
             materialLightmaps[i] = reader.u32(); // baked indirect-light texture, one-based
-            reader.skipU32(3); // normal, ORM, emissive
+            materialNormalMaps[i] = reader.u32();
+            reader.skipU32(2); // ORM, emissive
             materialLightmapStrengths[i] = Math.clamp(reader.f32(), 0.0f, 1.0f);
             long alphaMode = reader.u32();
             if (alphaMode > 2) throw new IOException("SKATE material has an unsupported alpha mode");
@@ -626,6 +628,9 @@ public final class SkateMapModel {
         }
         for (long lightmap : materialLightmaps) {
             if (lightmap > textureCount) throw new IOException("SKATE material references an invalid lightmap");
+        }
+        for (long normalMap : materialNormalMaps) {
+            if (normalMap > textureCount) throw new IOException("SKATE material references an invalid normal map");
         }
 
         List<TextureData> textures = new ArrayList<>(textureCount);
@@ -680,6 +685,16 @@ public final class SkateMapModel {
             long material = Integer.toUnsignedLong(vertices.getInt()) - 1;
             if (material < 0 || material >= materialCount) throw new IOException("SKATE vertex references an invalid material");
             vertexMaterials[i] = (int) material;
+            long normalMapId = materialNormalMaps[(int) material];
+            if (normalMapId != 0) {
+                TextureData normalMap = textures.get((int) normalMapId - 1);
+                byte binormalX = vertices.get(vertices.position() + 8);
+                byte binormalY = vertices.get(vertices.position() + 9);
+                byte binormalZ = vertices.get(vertices.position() + 10);
+                byte handedness = vertices.get(vertices.position() + 11);
+                applyVertexNormalMap(normals, p, uv[uvAt], uv[uvAt + 1], normalMap,
+                        binormalX, binormalY, binormalZ, handedness);
+            }
             sampleIndirectLight(textures, materialLightmaps[(int) material],
                     materialLightmapStrengths[(int) material], lightU, lightV,
                     vertexIndirectLight, p);
@@ -954,6 +969,42 @@ public final class SkateMapModel {
         return (texture.rgba[(y * texture.width + x) * 4 + channel] & 255) / 255.0f;
     }
 
+    /** Applies the retail tangent-space normal at each vertex for the renderer's vertex-lighting pass. */
+    static void applyVertexNormalMap(float[] normals, int normalOffset, float u, float v, TextureData texture,
+                                     byte binormalX, byte binormalY, byte binormalZ, byte handedness) {
+        float sign = handedness / 127.0f;
+        if (sign == 0.0f || texture.rgba == null) return;
+        float xPosition = Math.clamp(u, 0.0f, 1.0f) * (texture.width - 1);
+        float yPosition = Math.clamp(v, 0.0f, 1.0f) * (texture.height - 1);
+        int pixel = ((Math.round(yPosition) * texture.width) + Math.round(xPosition)) * 4;
+        float mappedX = (texture.rgba[pixel] & 255) / 127.5f - 1.0f;
+        float mappedY = (texture.rgba[pixel + 1] & 255) / 127.5f - 1.0f;
+        float mappedZ = (texture.rgba[pixel + 2] & 255) / 127.5f - 1.0f;
+        float mappedLength = (float) Math.sqrt(mappedX * mappedX + mappedY * mappedY + mappedZ * mappedZ);
+        if (mappedLength < 1.0e-6f) return;
+        mappedX /= mappedLength;
+        mappedY /= mappedLength;
+        mappedZ /= mappedLength;
+
+        float normalX = normals[normalOffset];
+        float normalY = normals[normalOffset + 1];
+        float normalZ = normals[normalOffset + 2];
+        float binormalWorldX = binormalX / 127.0f;
+        float binormalWorldY = binormalY / 127.0f;
+        float binormalWorldZ = binormalZ / 127.0f;
+        float tangentX = (binormalWorldY * normalZ - binormalWorldZ * normalY) * sign;
+        float tangentY = (binormalWorldZ * normalX - binormalWorldX * normalZ) * sign;
+        float tangentZ = (binormalWorldX * normalY - binormalWorldY * normalX) * sign;
+        float worldX = tangentX * mappedX + binormalWorldX * mappedY + normalX * mappedZ;
+        float worldY = tangentY * mappedX + binormalWorldY * mappedY + normalY * mappedZ;
+        float worldZ = tangentZ * mappedX + binormalWorldZ * mappedY + normalZ * mappedZ;
+        float worldLength = (float) Math.sqrt(worldX * worldX + worldY * worldY + worldZ * worldZ);
+        if (worldLength < 1.0e-6f) return;
+        normals[normalOffset] = worldX / worldLength;
+        normals[normalOffset + 1] = worldY / worldLength;
+        normals[normalOffset + 2] = worldZ / worldLength;
+    }
+
     private static float[] primitiveBounds(float[] positions, int[] indices) {
         float[] bounds = {Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY,
                 Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY};
@@ -1025,12 +1076,12 @@ public final class SkateMapModel {
                               float fogNear, float fogFar, float fogPower, float fogMaximum,
                               float[] fogColor, float[] sunDirection, float sunScale, float exposure,
                               int diffuseTextureIndex, long texturePixels) {}
-    private static final class TextureData {
+    static final class TextureData {
         private final String name;
         private final int width, height;
         private byte[] rgba;
 
-        private TextureData(String name, int width, int height, byte[] rgba) {
+        TextureData(String name, int width, int height, byte[] rgba) {
             this.name = name;
             this.width = width;
             this.height = height;
