@@ -2,6 +2,12 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 
 ### Fixes in this build
 
+- Apply the Skate chase camera after Minecraft's camera extraction so vanilla camera setup cannot overwrite the Skate-follow position; synchronize the final render pose, projection, and culling frustum.
+- Anchor Minecraft-world chase view to the interpolated Skate skeleton and test heading and look-at camera math.
+- Keep OPAQUE GLB materials opaque when source textures carry packed alpha data, preventing sparse or flickering skater and board meshes.
+- Decode each skater's interpolated joint positions and rotations once per render submission and reuse that snapshot across the GLB primitives.
+- Keep Minecraft-world mode as the default when no retail district is selected, and make the installer describe retail maps as optional.
+- Run the PEX runtime smoke with two simultaneous clients in CI; both must activate Skate and have a control sequence consumed.
 - Keep the skateboard model's cuboids inside Minecraft's 16×16 model bounds so the item model bakes without out-of-range face UVs.
 - Add a regression check covering every skateboard cuboid coordinate.
 - Coalesce repeated `/skate` key presses while waiting for the server's state acknowledgement, avoiding duplicate toggles during synchronous district loading.
