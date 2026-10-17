@@ -44,7 +44,7 @@ public abstract class SkateCameraMixin {
     private void pexskate$applyEngineCamera(CameraRenderState state, DeltaTracker delta, CallbackInfo ci) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null || client.level == null) return;
-        SkatePoseCache.Pose pose = SkatePoseCache.sample(client.player.getId(), true);
+        SkatePoseCache.Pose pose = SkatePoseCache.sampleForRenderCamera(client.player.getId());
         if (pose == null) return;
 
         if (!SkateMapModel.hasActiveRetailMap(client.player.getId())) {
@@ -56,7 +56,10 @@ public abstract class SkateCameraMixin {
             if (hipsPoint == null) return;
             Vec3 hips = new Vec3(hipsPoint[0], hipsPoint[1], hipsPoint[2]);
             Vec3 lookAt = hips.add(0.0, 0.75, 0.0);
-            Vec3 target = SkateCameraMath.minecraftChasePosition(hips, pose.yaw());
+            // Board yaw can spin independently while the skater performs a
+            // trick. Use the torso heading so the chase camera stays aligned
+            // with the same character pose rendered this frame.
+            Vec3 target = SkateCameraMath.minecraftChasePosition(hips, pose.characterYaw());
 
             double segmentLength = lookAt.distanceTo(target);
             if (segmentLength > 1.0e-6) {

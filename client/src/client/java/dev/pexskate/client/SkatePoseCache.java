@@ -21,6 +21,11 @@ public final class SkatePoseCache {
     // already-stale pose with no prediction at all.
     private static volatile long localPredictionLeadNanos = DEFAULT_LOCAL_PREDICTION_LEAD_NANOS;
     private static final Map<Integer, Track> TRACKS = new HashMap<>();
+    // Camera extraction runs before entity rendering. Pin its local pose for
+    // the rest of that render frame so the camera, vanilla rig, and GLB all
+    // use the same network snapshot even if another payload is applied mid-frame.
+    private static volatile int renderPoseEntityId = Integer.MIN_VALUE;
+    private static volatile Pose renderPose;
 
     private SkatePoseCache() {}
 
@@ -58,10 +63,12 @@ public final class SkatePoseCache {
 
     public static void remove(int entityId) {
         TRACKS.remove(entityId);
+        if (renderPoseEntityId == entityId) clearRenderPose();
     }
 
     public static void clear() {
         TRACKS.clear();
+        clearRenderPose();
     }
 
     public static void updateInputRoundTrip(long roundTripNanos) {
@@ -80,6 +87,19 @@ public final class SkatePoseCache {
 
     /** Local presentation uses a shorter buffer and predicts only from the server's latest velocity. */
     public static Pose sample(int entityId, boolean localEntity) {
+        if (localEntity && renderPoseEntityId == entityId) return renderPose;
+        return sampleUnpinned(entityId, localEntity);
+    }
+
+    /** Samples and pins the pose at camera extraction, before any skater render hooks run. */
+    public static Pose sampleForRenderCamera(int entityId) {
+        Pose pose = sampleUnpinned(entityId, true);
+        renderPose = pose;
+        renderPoseEntityId = entityId;
+        return pose;
+    }
+
+    private static Pose sampleUnpinned(int entityId, boolean localEntity) {
         Track track = TRACKS.get(entityId);
         if (track == null) return null;
         Frame a = track.previous;
@@ -93,6 +113,11 @@ public final class SkatePoseCache {
         }
         if (sampleTime <= a.time) return new Pose(a, a, 0.0f);
         return new Pose(a, b, (float) (sampleTime - a.time) / (float) (b.time - a.time), 0.0f);
+    }
+
+    private static void clearRenderPose() {
+        renderPoseEntityId = Integer.MIN_VALUE;
+        renderPose = null;
     }
 
     static long extrapolationNanos(long elapsedSinceSnapshotNanos, boolean localEntity) {
@@ -174,8 +199,23 @@ public final class SkatePoseCache {
         }
 
         public float yaw() {
-            float delta = (b.yaw - a.yaw + (float) Math.PI * 3.0f) % ((float) Math.PI * 2.0f) - (float) Math.PI;
-            return a.yaw + delta * t;
+            return predictAngle(a.yaw, b.yaw, t, snapshotDeltaSeconds(), extrapolationSeconds);
+        }
+
+        /** Horizontal facing direction of the skater's body, independent of board trick rotation. */
+        public float characterYaw() {
+            float[] hips = point(1);
+            float[] spine = point(5);
+            float[] leftHip = point(21);
+            float[] rightHip = point(17);
+            if (hips == null || spine == null || leftHip == null || rightHip == null) return yaw();
+
+            float[] up = subtract(spine, hips);
+            float[] right = subtract(rightHip, leftHip);
+            float[] forward = cross(up, right);
+            float horizontalLength = (float) Math.sqrt(forward[0] * forward[0] + forward[2] * forward[2]);
+            if (!Float.isFinite(horizontalLength) || horizontalLength < 1.0e-4f) return yaw();
+            return (float) Math.atan2(-forward[0], forward[2]);
         }
 
         public boolean hasCamera() {
@@ -185,11 +225,18 @@ public final class SkatePoseCache {
 
         public float[] cameraPosition() {
             if (!hasCamera()) return null;
-            return new float[] {
-                    lerp(a.rootX + a.camera[0], b.rootX + b.camera[0], t) + b.velocityX * extrapolationSeconds,
-                    lerp(a.rootY + a.camera[1], b.rootY + b.camera[1], t) + b.velocityY * extrapolationSeconds,
-                    lerp(a.rootZ + a.camera[2], b.rootZ + b.camera[2], t) + b.velocityZ * extrapolationSeconds
-            };
+            float[] previous = cameraWorldPosition(a);
+            float[] current = cameraWorldPosition(b);
+            float[] result = new float[3];
+            float dt = snapshotDeltaSeconds();
+            for (int axis = 0; axis < 3; axis++) {
+                float sampled = lerp(previous[axis], current[axis], t);
+                float velocity = dt > 0.0f
+                        ? (current[axis] - previous[axis]) / dt
+                        : axis == 0 ? b.velocityX : axis == 1 ? b.velocityY : b.velocityZ;
+                result[axis] = sampled + velocity * extrapolationSeconds;
+            }
+            return result;
         }
 
         public float[] cameraForward() { return vector(3); }
@@ -203,6 +250,14 @@ public final class SkatePoseCache {
                     lerp(a.camera[offset + 1], b.camera[offset + 1], t),
                     lerp(a.camera[offset + 2], b.camera[offset + 2], t)
             };
+            float dt = snapshotDeltaSeconds();
+            if (dt > 0.0f && extrapolationSeconds > 0.0f) {
+                float prediction = Math.min(extrapolationSeconds, dt);
+                for (int axis = 0; axis < 3; axis++) {
+                    value[axis] += (b.camera[offset + axis] - a.camera[offset + axis])
+                            / dt * prediction;
+                }
+            }
             float length = length(value);
             if (length > 1.0e-5f) {
                 value[0] /= length; value[1] /= length; value[2] /= length;
@@ -210,8 +265,48 @@ public final class SkatePoseCache {
             return value;
         }
 
+        private float snapshotDeltaSeconds() {
+            return b.time > a.time ? (b.time - a.time) / 1_000_000_000.0f : 0.0f;
+        }
+
+        static float predictAngle(float first, float second, float interpolation,
+                                  float snapshotDeltaSeconds, float predictionSeconds) {
+            float delta = (second - first + (float) Math.PI * 3.0f)
+                    % ((float) Math.PI * 2.0f) - (float) Math.PI;
+            float sampled = first + delta * interpolation;
+            if (snapshotDeltaSeconds > 0.0f) {
+                sampled += delta / snapshotDeltaSeconds * Math.min(predictionSeconds, snapshotDeltaSeconds);
+            }
+            return wrapAngle(sampled);
+        }
+
+        private static float[] cameraWorldPosition(Frame frame) {
+            return new float[] {
+                    frame.rootX + frame.camera[0],
+                    frame.rootY + frame.camera[1],
+                    frame.rootZ + frame.camera[2]
+            };
+        }
+
+        private static float wrapAngle(float angle) {
+            return (angle + (float) Math.PI) % ((float) Math.PI * 2.0f)
+                    - (float) Math.PI;
+        }
+
         private static float length(float[] value) {
             return (float) Math.sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
+        }
+
+        private static float[] subtract(float[] first, float[] second) {
+            return new float[] {first[0] - second[0], first[1] - second[1], first[2] - second[2]};
+        }
+
+        private static float[] cross(float[] first, float[] second) {
+            return new float[] {
+                    first[1] * second[2] - first[2] * second[1],
+                    first[2] * second[0] - first[0] * second[2],
+                    first[0] * second[1] - first[1] * second[0]
+            };
         }
 
         private static float[] point(Frame frame, int index) {
