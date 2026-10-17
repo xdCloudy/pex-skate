@@ -83,6 +83,8 @@ The `--xex` argument accepts either the ISO or `default.xex` from an already ext
 4. Join the server and press **G** to toggle Skate mode on the client and server. Press **G** again to turn it off.
 5. Use **W** or **Space** for a right-foot push, **Shift** for a left-foot push, **S** to brake, and **A/D** to steer. The arrow keys are the right-stick Flick-It directions; customize them under Controls → PEX Skate. A standard mapped gamepad uses **A/X/B** for right-foot push/left-foot push/brake, the left stick for pumping/steering, and the right stick for tricks.
 
+The client keybinds appear in Controls even outside a PEX server. Actual skating and the `/skate` command require a server running the PEX Skate WebAssembly plugin; ordinary single-player worlds do not include it.
+
 The server command `/skate` is also available for server-side toggling. The default camera is switched to third-person while the client mode is active.
 
 The server physics difficulty can be selected for all new sessions with `<server>/plugins/data/pex-skate/settings/difficulty.txt`. Set it to `easy`, `normal`, or `hardcore` (case-insensitive); if the file is absent, the engine's Easy mode is used. Toggle Skate mode off and on again to apply a changed setting.

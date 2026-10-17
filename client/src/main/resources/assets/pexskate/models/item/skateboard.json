@@ -6,12 +6,12 @@
     "particle": "pexskate:item/skateboard_deck"
   },
   "elements": [
-    {"from": [1, 0, 5], "to": [15, 1, 11], "faces": {"north": {"texture": "#deck"}, "south": {"texture": "#deck"}, "east": {"texture": "#deck"}, "west": {"texture": "#deck"}, "up": {"texture": "#deck"}, "down": {"texture": "#deck"}}},
-    {"from": [2, -1, 5], "to": [4, 0, 11], "faces": {"north": {"texture": "#truck"}, "south": {"texture": "#truck"}, "east": {"texture": "#truck"}, "west": {"texture": "#truck"}, "up": {"texture": "#truck"}, "down": {"texture": "#truck"}}},
-    {"from": [12, -1, 5], "to": [14, 0, 11], "faces": {"north": {"texture": "#truck"}, "south": {"texture": "#truck"}, "east": {"texture": "#truck"}, "west": {"texture": "#truck"}, "up": {"texture": "#truck"}, "down": {"texture": "#truck"}}},
-    {"from": [0, -2, 2], "to": [3, 0, 5], "faces": {"north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"}, "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"}}},
-    {"from": [0, -2, 11], "to": [3, 0, 14], "faces": {"north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"}, "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"}}},
-    {"from": [13, -2, 2], "to": [16, 0, 5], "faces": {"north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"}, "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"}}},
-    {"from": [13, -2, 11], "to": [16, 0, 14], "faces": {"north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"}, "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"}}}
+    {"from": [1, 2, 5], "to": [15, 3, 11], "faces": {"north": {"texture": "#deck"}, "south": {"texture": "#deck"}, "east": {"texture": "#deck"}, "west": {"texture": "#deck"}, "up": {"texture": "#deck"}, "down": {"texture": "#deck"}}},
+    {"from": [2, 1, 5], "to": [4, 2, 11], "faces": {"north": {"texture": "#truck"}, "south": {"texture": "#truck"}, "east": {"texture": "#truck"}, "west": {"texture": "#truck"}, "up": {"texture": "#truck"}, "down": {"texture": "#truck"}}},
+    {"from": [12, 1, 5], "to": [14, 2, 11], "faces": {"north": {"texture": "#truck"}, "south": {"texture": "#truck"}, "east": {"texture": "#truck"}, "west": {"texture": "#truck"}, "up": {"texture": "#truck"}, "down": {"texture": "#truck"}}},
+    {"from": [0, 0, 2], "to": [3, 2, 5], "faces": {"north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"}, "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"}}},
+    {"from": [0, 0, 11], "to": [3, 2, 14], "faces": {"north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"}, "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"}}},
+    {"from": [13, 0, 2], "to": [16, 2, 5], "faces": {"north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"}, "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"}}},
+    {"from": [13, 0, 11], "to": [16, 2, 14], "faces": {"north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"}, "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"}}}
   ]
 }

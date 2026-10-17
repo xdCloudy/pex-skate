@@ -30,4 +30,28 @@ class SkateboardItemModelTest {
             assertEquals(4, count, "deck, truck, wheel, and particle textures are declared");
         }
     }
+
+    @Test
+    void keepsEveryCuboidInsideTheSixteenPixelModelBounds() throws IOException {
+        try (InputStream input = getClass().getResourceAsStream(
+                "/assets/pexskate/models/item/skateboard.json")) {
+            assertTrue(input != null, "skateboard item model resource is present");
+            String model = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            Matcher coordinates = Pattern.compile(
+                    "\\\"(?:from|to)\\\"\\s*:\\s*\\[([^\\]]+)\\]")
+                    .matcher(model);
+            int cuboidCorners = 0;
+            while (coordinates.find()) {
+                String[] axes = coordinates.group(1).split(",");
+                assertEquals(3, axes.length, "each cuboid corner has three coordinates");
+                for (String axis : axes) {
+                    double coordinate = Double.parseDouble(axis.trim());
+                    assertTrue(coordinate >= 0.0 && coordinate <= 16.0,
+                            "default face UVs must stay inside the 16x16 atlas: " + coordinate);
+                }
+                cuboidCorners++;
+            }
+            assertTrue(cuboidCorners > 0, "model contains cuboid corners");
+        }
+    }
 }
