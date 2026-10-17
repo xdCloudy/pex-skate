@@ -1,8 +1,8 @@
 {
   "textures": {
     "deck": "pexskate:item/skateboard_deck",
-    "truck": "minecraft:block/iron_block",
-    "wheel": "minecraft:block/black_concrete",
+    "truck": "minecraft:item/iron_nugget",
+    "wheel": "minecraft:item/coal",
     "particle": "pexskate:item/skateboard_deck"
   },
   "elements": [

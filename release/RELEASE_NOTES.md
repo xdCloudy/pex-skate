@@ -2,11 +2,14 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 
 ### Fixes in this build
 
+- Keep every skateboard cuboid texture in Minecraft's item atlas so the client can bake the skateboard model without crossing into the block atlas.
+- Add a regression test for the skateboard item-atlas contract.
 - Register the `/skate` command behind a dedicated permission granted to players by default. Previously, PEX hid the command from regular players because the permission node was empty.
 - Raise the WASM guest stack to 8 MiB so SkateGM's stock physics and animation data can initialize inside the PEX runtime.
 - The PEX runtime smoke client now replies to Minecraft 26.3 teleport requests with the accepted position and rotation. It also reports system chat and Skate state payloads when diagnosing gameplay activation.
 - The data-backed runtime smoke test timeout can be shortened with `PEX_SKATE_SMOKE_TIMEOUT_SECONDS`.
 - The data-backed smoke harness can restart PEX across a semicolon-separated `PEX_SKATE_SMOKE_MAPS` list while reusing one converted data copy.
+- The smoke harness can keep its disposable server alive after the protocol check for a local Fabric client visual QA session.
 
 ### What's included
 

@@ -6,5 +6,6 @@
 /client/build/
 /client/.loom/
 /client/logs/
+/client/run/
 __pycache__/
 *.py[cod]

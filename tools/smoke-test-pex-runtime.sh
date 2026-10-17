@@ -135,7 +135,12 @@ run_server_smoke() {
     python3 "$script_dir/check_pex_status.py"
     echo "PEX $server_version loaded pex-skate.wasm, accepted an offline Minecraft 26.3 player, acknowledged the PEX Skate payload, and passed the status handshake."
   fi
-  stop_server
+  if [[ "${PEX_SKATE_SMOKE_KEEP_SERVER:-0}" == "1" ]]; then
+    echo "Leaving the disposable PEX server running for a manual client check (pid $server_pid); press Ctrl+C to stop it."
+    wait "$server_pid"
+  else
+    stop_server
+  fi
 }
 
 if [[ -n "$converted_data" ]]; then
