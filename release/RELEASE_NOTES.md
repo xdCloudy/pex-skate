@@ -6,6 +6,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Raise the WASM guest stack to 8 MiB so SkateGM's stock physics and animation data can initialize inside the PEX runtime.
 - The PEX runtime smoke client now replies to Minecraft 26.3 teleport requests with the accepted position and rotation. It also reports system chat and Skate state payloads when diagnosing gameplay activation.
 - The data-backed runtime smoke test timeout can be shortened with `PEX_SKATE_SMOKE_TIMEOUT_SECONDS`.
+- The data-backed smoke harness can restart PEX across a semicolon-separated `PEX_SKATE_SMOKE_MAPS` list while reusing one converted data copy.
 
 ### What's included
 
@@ -38,4 +39,4 @@ See `INSTALL.md` in `PEX-Skate-26.3.zip`. Each player needs the Fabric client an
 
 ### Known limitations
 
-This is an alpha and is not production-ready. The PEX client/server handshake is tested against a live PEX process, and all 10 districts from one Xbox 360 ISO converted and parsed with their available prop packages, but gameplay has not been validated in a live Minecraft session. Some authored DMO template IDs can be absent from the supplied archive and are reported/skipped. Board impacts can translate and yaw-rotate authored district props around a shared collision pivot, damp their motion, and synchronize transforms to clients; clients interpolate the received poses between snapshots. Authored mass and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions are not implemented. Multiplayer behavior and long-distance skating still need live gameplay validation.
+This is an alpha and is not production-ready. All 10 districts converted from the supplied Xbox 360 ISO have now each passed a live PEX runtime smoke test: an offline Minecraft 26.3 client authenticated, `/skate` activated an engine session on the selected map, one v9 control sequence was consumed, and the server status handshake succeeded. This validates the server session startup and input path against real converted district data, not Fabric rendering or gameplay feel in an actual Minecraft client. Some authored DMO template IDs can be absent from the supplied archive and are reported/skipped. Board impacts can translate and yaw-rotate authored district props around a shared collision pivot, damp their motion, and synchronize transforms to clients; clients interpolate the received poses between snapshots. Authored mass and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions are not implemented. Multiplayer behavior, visual rendering, controller input and long-distance skating still need live gameplay validation.

@@ -11,7 +11,7 @@ server_url="https://github.com/Conman1533/PEX/releases/download/${server_version
 work_dir=$(mktemp -d)
 server_pid=
 
-cleanup() {
+stop_server() {
   if [[ -n "$server_pid" ]] && kill -0 "$server_pid" 2>/dev/null; then
     kill -INT "$server_pid" 2>/dev/null || true
     for _ in $(seq 1 15); do
@@ -21,6 +21,11 @@ cleanup() {
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
+  server_pid=
+}
+
+cleanup() {
+  stop_server
   rm -rf "$work_dir"
 }
 trap cleanup EXIT
@@ -52,10 +57,6 @@ if [[ -n "$converted_data" ]]; then
       cp -a "$converted_data/$entry" "$data_root/"
     fi
   done
-  if [[ -n "${PEX_SKATE_SMOKE_MAP:-}" ]]; then
-    mkdir -p "$data_root/settings"
-    printf '%s\n' "$PEX_SKATE_SMOKE_MAP" > "$data_root/settings/default-map.txt"
-  fi
 fi
 plugin_sha256=$(sha256sum "$work_dir/plugins/pex-skate.wasm" | cut -d ' ' -f 1)
 printf '{"entries":{"%s":{"permissions_requested":["fs.read.data"],"approved":true}}}\n' \
@@ -70,57 +71,86 @@ enabled = false
 EOF
 
 cd "$work_dir"
-"$work_dir/$server_name" > server.log 2>&1 &
-server_pid=$!
 
-ready=false
-for _ in $(seq 1 180); do
-  if ! kill -0 "$server_pid" 2>/dev/null; then
-    cat server.log
-    echo "PEX exited before the skate plugin became available" >&2
-    exit 1
-  fi
-  if grep -Eqi 'permission denied|failed to load plugin|plugin.*(failed|error|panic)' server.log; then
-    cat server.log
-    echo "PEX reported a plugin load failure" >&2
-    exit 1
-  fi
-  if grep -q 'uses the following permissions: \["fs.read.data"\]' server.log \
-      && python3 "$script_dir/check_pex_status.py" --quiet; then
-    ready=true
-    break
-  fi
-  sleep 1
-done
+start_server() {
+  "$work_dir/$server_name" > server.log 2>&1 &
+  server_pid=$!
 
-if [[ "$ready" != true ]]; then
-  cat server.log
-  echo "PEX did not reach the listening state with pex-skate loaded" >&2
-  exit 1
-fi
+  local ready=false
+  for _ in $(seq 1 180); do
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+      tail -n 40 server.log
+      echo "PEX exited before the skate plugin became available" >&2
+      return 1
+    fi
+    if grep -Eqi 'permission denied|failed to load plugin|plugin.*(failed|error|panic)' server.log; then
+      tail -n 40 server.log
+      echo "PEX reported a plugin load failure" >&2
+      return 1
+    fi
+    if grep -q 'uses the following permissions: \["fs.read.data"\]' server.log \
+        && python3 "$script_dir/check_pex_status.py" --quiet; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
 
-module_cache=$(find plugins/cache/modules -type f -print -quit 2>/dev/null || true)
-if [[ -z "$module_cache" ]]; then
-  cat server.log
-  echo "PEX did not compile the pex-skate WebAssembly component" >&2
-  exit 1
-fi
+  if [[ "$ready" != true ]]; then
+    tail -n 40 server.log
+    echo "PEX did not reach the listening state with pex-skate loaded" >&2
+    return 1
+  fi
+
+  local module_cache
+  module_cache=$(find plugins/cache/modules -type f -print -quit 2>/dev/null || true)
+  if [[ -z "$module_cache" ]]; then
+    tail -n 40 server.log
+    echo "PEX did not compile the pex-skate WebAssembly component" >&2
+    return 1
+  fi
+}
+
+run_server_smoke() {
+  local map_name=${1:-}
+  if [[ -n "$map_name" ]]; then
+    mkdir -p "$data_root/settings"
+    printf '%s\n' "$map_name" > "$data_root/settings/default-map.txt"
+  fi
+
+  start_server
+  if [[ -n "$converted_data" ]]; then
+    local exercise_timeout=${PEX_SKATE_SMOKE_TIMEOUT_SECONDS:-180}
+    if ! python3 "$script_dir/test_pex_payload_client.py" --exercise-skate --exercise-timeout "$exercise_timeout"; then
+      tail -n 12 server.log | cut -c1-1200
+      return 1
+    fi
+    python3 "$script_dir/check_pex_status.py"
+    echo "PEX $server_version loaded ${map_name:-the default Skate map}, activated an engine session, consumed client controls, and passed the status handshake."
+  else
+    if ! python3 "$script_dir/test_pex_payload_client.py"; then
+      tail -n 40 server.log
+      return 1
+    fi
+    python3 "$script_dir/check_pex_status.py"
+    echo "PEX $server_version loaded pex-skate.wasm, accepted an offline Minecraft 26.3 player, acknowledged the PEX Skate payload, and passed the status handshake."
+  fi
+  stop_server
+}
 
 if [[ -n "$converted_data" ]]; then
-  exercise_timeout=${PEX_SKATE_SMOKE_TIMEOUT_SECONDS:-180}
-  if ! python3 "$script_dir/test_pex_payload_client.py" --exercise-skate --exercise-timeout "$exercise_timeout"; then
-    tail -n 12 server.log | cut -c1-1200
-    exit 1
+  if [[ -n "${PEX_SKATE_SMOKE_MAPS:-}" ]]; then
+    IFS=';' read -r -a smoke_maps <<< "$PEX_SKATE_SMOKE_MAPS"
+    for map_name in "${smoke_maps[@]}"; do
+      if [[ -z "$map_name" ]]; then
+        echo "PEX_SKATE_SMOKE_MAPS contains an empty map name" >&2
+        exit 1
+      fi
+      run_server_smoke "$map_name"
+    done
+  else
+    run_server_smoke "${PEX_SKATE_SMOKE_MAP:-}"
   fi
 else
-  if ! python3 "$script_dir/test_pex_payload_client.py"; then
-    cat server.log
-    exit 1
-  fi
-fi
-python3 "$script_dir/check_pex_status.py"
-if [[ -n "$converted_data" ]]; then
-  echo "PEX $server_version loaded Skate data, activated an engine session, consumed client controls, and passed the status handshake."
-else
-  echo "PEX $server_version loaded pex-skate.wasm, accepted an offline Minecraft 26.3 player, acknowledged the PEX Skate payload, and passed the status handshake."
+  run_server_smoke
 fi
