@@ -87,6 +87,23 @@ final class SkatePosePredictionTest {
     }
 
     @Test
+    void localSkaterJointsShareThePredictedRootDuringAcceleration() {
+        float[] predictedRoot = {1.05f, 0.0f, 0.0f};
+        float[] predictedHips = SkatePoseCache.Pose.predictRootRelativePoint(
+                new float[] {0.0f, 0.0f, 0.0f},
+                new float[] {0.9f, 0.0f, 0.0f},
+                new float[] {0.0f, 0.0f, 0.0f},
+                new float[] {1.0f, 0.0f, 0.0f},
+                predictedRoot,
+                1.0f,
+                0.05f,
+                0.025f);
+
+        assertEquals(0.9f, predictedHips[0], 1.0e-5f);
+        assertEquals(-0.15f, predictedHips[0] - predictedRoot[0], 1.0e-5f);
+    }
+
+    @Test
     void localSkeletalAnchorPredictionUsesRootVelocityWithoutTwoSnapshots() {
         float[] predicted = SkatePoseCache.Pose.predictPoint(
                 new float[] {1.0f, 2.0f, 3.0f},

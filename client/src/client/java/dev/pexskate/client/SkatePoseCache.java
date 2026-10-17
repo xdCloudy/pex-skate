@@ -173,8 +173,31 @@ public final class SkatePoseCache {
             if (!has(index)) return null;
             float[] first = point(a, index);
             float[] second = point(b, index);
-            return predictPoint(first, second, t, snapshotDeltaSeconds(), extrapolationSeconds,
-                    new float[] {b.velocityX, b.velocityY, b.velocityZ});
+            return predictRootRelativePoint(first, second,
+                    rootPositionFor(a), rootPositionFor(b), rootPosition(), t,
+                    snapshotDeltaSeconds(), extrapolationSeconds);
+        }
+
+        /**
+         * Carry every local joint with the exact root prediction used by the
+         * Minecraft avatar and chase camera. Predict only articulation in
+         * root-relative space so differences between server velocity and the
+         * finite-difference velocity of a joint cannot pull the skater away
+         * from its camera anchor during acceleration.
+         */
+        static float[] predictRootRelativePoint(float[] firstPoint, float[] secondPoint,
+                                                float[] firstRoot, float[] secondRoot,
+                                                float[] predictedRoot, float interpolation,
+                                                float snapshotDeltaSeconds, float predictionSeconds) {
+            float[] firstRelative = subtract(firstPoint, firstRoot);
+            float[] secondRelative = subtract(secondPoint, secondRoot);
+            float[] relative = predictPoint(firstRelative, secondRelative, interpolation,
+                    snapshotDeltaSeconds, predictionSeconds, new float[3]);
+            return new float[] {
+                    predictedRoot[0] + relative[0],
+                    predictedRoot[1] + relative[1],
+                    predictedRoot[2] + relative[2]
+            };
         }
 
         /**
@@ -203,10 +226,19 @@ public final class SkatePoseCache {
 
         /** World-space simulation root used to place Minecraft's avatar render state. */
         public float[] rootPosition() {
+            return interpolateRoot(a, b, t, extrapolationSeconds);
+        }
+
+        private static float[] rootPositionFor(Frame frame) {
+            return new float[] {frame.rootX, frame.rootY, frame.rootZ};
+        }
+
+        private static float[] interpolateRoot(Frame first, Frame second, float interpolation,
+                                               float predictionSeconds) {
             return new float[] {
-                    lerp(a.rootX, b.rootX, t) + b.velocityX * extrapolationSeconds,
-                    lerp(a.rootY, b.rootY, t) + b.velocityY * extrapolationSeconds,
-                    lerp(a.rootZ, b.rootZ, t) + b.velocityZ * extrapolationSeconds
+                    lerp(first.rootX, second.rootX, interpolation) + second.velocityX * predictionSeconds,
+                    lerp(first.rootY, second.rootY, interpolation) + second.velocityY * predictionSeconds,
+                    lerp(first.rootZ, second.rootZ, interpolation) + second.velocityZ * predictionSeconds
             };
         }
 
