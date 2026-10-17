@@ -66,6 +66,7 @@ public final class PexSkateClient implements ClientModInitializer {
     private static final byte CLIENT_PROTOCOL_VERSION = 8;
     private boolean skating;
     private volatile boolean serverProtocolReady;
+    private final SkateToggleRequestGate toggleRequestGate = new SkateToggleRequestGate();
     private CameraType previousCamera;
     private long gamepadHandle;
     private boolean gamepadSubsystemReady;
@@ -100,6 +101,10 @@ public final class PexSkateClient implements ClientModInitializer {
                             && context.client().player.getId() == payload.entityId()) {
                         acknowledgeControls(payload.acknowledgedControlSequence());
                     }
+                    if (context.client().player != null
+                            && context.client().player.getId() == payload.entityId()) {
+                        toggleRequestGate.acknowledge();
+                    }
                     if (payload.active() && payload.mapBacked()
                             && !SkateMapModel.isReadyFor(payload.mapFilename(), payload.mapSha256(), payload.propsSha256())) {
                         if (payload.version() >= 8) SkateMapModel.loadMap(payload.mapFilename(), payload.mapSha256(), payload.propsSha256());
@@ -130,6 +135,7 @@ public final class PexSkateClient implements ClientModInitializer {
         });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             serverProtocolReady = false;
+            toggleRequestGate.reset();
             nextControlSequence = 0;
             outstandingControls.clear();
             SkatePoseCache.resetInputRoundTrip();
@@ -285,10 +291,12 @@ public final class PexSkateClient implements ClientModInitializer {
     }
 
     private void tick(Minecraft client) {
+        boolean toggleRequested = TOGGLE.consumeClick();
         while (TOGGLE.consumeClick()) {
-            if (client.player == null) {
-                continue;
-            }
+            toggleRequested = true;
+        }
+        if (toggleRequested && client.player != null
+                && toggleRequestGate.begin(System.nanoTime())) {
             client.player.connection.sendCommand("skate");
         }
 

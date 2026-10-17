@@ -2,6 +2,11 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 
 ### Fixes in this build
 
+- Coalesce repeated `/skate` key presses while waiting for the server's state acknowledgement, avoiding duplicate toggles during synchronous district loading.
+- Add focused client tests for duplicate suppression, server acknowledgement, retry timeout, and connection reset.
+
+### Fixes in this build
+
 - Keep every skateboard cuboid texture in Minecraft's item atlas so the client can bake the skateboard model without crossing into the block atlas.
 - Add a regression test for the skateboard item-atlas contract.
 - Register the `/skate` command behind a dedicated permission granted to players by default. Previously, PEX hid the command from regular players because the permission node was empty.
