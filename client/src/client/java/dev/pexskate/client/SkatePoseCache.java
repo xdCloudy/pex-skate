@@ -169,11 +169,31 @@ public final class SkatePoseCache {
             if (!has(index)) return null;
             float[] first = point(a, index);
             float[] second = point(b, index);
-            return new float[] {
-                    lerp(first[0], second[0], t) + b.velocityX * extrapolationSeconds,
-                    lerp(first[1], second[1], t) + b.velocityY * extrapolationSeconds,
-                    lerp(first[2], second[2], t) + b.velocityZ * extrapolationSeconds
-            };
+            return predictPoint(first, second, t, snapshotDeltaSeconds(), extrapolationSeconds,
+                    new float[] {b.velocityX, b.velocityY, b.velocityZ});
+        }
+
+        /**
+         * Sample a joint between snapshots and carry its observed motion forward
+         * with the same prediction interval used for the local render root. The
+         * GLB is positioned from these world-space joints, so leaving them at the
+         * last server sample made the skater appear to trail a camera whose root
+         * position was already being predicted.
+         */
+        static float[] predictPoint(float[] first, float[] second, float interpolation,
+                                    float snapshotDeltaSeconds, float predictionSeconds,
+                                    float[] fallbackVelocity) {
+            float[] result = new float[3];
+            for (int axis = 0; axis < 3; axis++) {
+                float sampled = lerp(first[axis], second[axis], interpolation);
+                if (snapshotDeltaSeconds > 0.0f && predictionSeconds > 0.0f) {
+                    sampled += (second[axis] - first[axis]) / snapshotDeltaSeconds * predictionSeconds;
+                } else if (predictionSeconds > 0.0f) {
+                    sampled += fallbackVelocity[axis] * predictionSeconds;
+                }
+                result[axis] = sampled;
+            }
+            return result;
         }
 
         /** World-space simulation root used to place Minecraft's avatar render state. */
@@ -190,17 +210,37 @@ public final class SkatePoseCache {
             if (!has(index)) return null;
             float[] first = rotation(a, index);
             float[] second = rotation(b, index);
+            return predictRotation(first, second, t, snapshotDeltaSeconds(), extrapolationSeconds);
+        }
+
+        static float[] predictRotation(float[] first, float[] second, float interpolation,
+                                       float snapshotDeltaSeconds, float predictionSeconds) {
             float dot = first[0] * second[0] + first[1] * second[1]
                     + first[2] * second[2] + first[3] * second[3];
             if (dot < 0.0f) {
                 for (int i = 0; i < 4; i++) second[i] = -second[i];
             }
-            float[] result = new float[4];
-            float magnitude = 0.0f;
-            for (int i = 0; i < 4; i++) {
-                result[i] = first[i] + (second[i] - first[i]) * t;
-                magnitude += result[i] * result[i];
+            float sampledTime = interpolation;
+            if (snapshotDeltaSeconds > 0.0f && predictionSeconds > 0.0f) {
+                sampledTime += predictionSeconds / snapshotDeltaSeconds;
             }
+            float[] result = new float[4];
+            dot = Math.clamp(dot, -1.0f, 1.0f);
+            if (dot > 0.9995f) {
+                for (int i = 0; i < 4; i++) {
+                    result[i] = first[i] + (second[i] - first[i]) * sampledTime;
+                }
+            } else {
+                double angle = Math.acos(dot);
+                double sinAngle = Math.sin(angle);
+                double firstWeight = Math.sin((1.0 - sampledTime) * angle) / sinAngle;
+                double secondWeight = Math.sin(sampledTime * angle) / sinAngle;
+                for (int i = 0; i < 4; i++) {
+                    result[i] = (float) (first[i] * firstWeight + second[i] * secondWeight);
+                }
+            }
+            float magnitude = 0.0f;
+            for (float component : result) magnitude += component * component;
             magnitude = (float) Math.sqrt(magnitude);
             if (magnitude < 1.0e-5f) return new float[] {0.0f, 0.0f, 0.0f, 1.0f};
             for (int i = 0; i < 4; i++) result[i] /= magnitude;

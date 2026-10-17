@@ -72,6 +72,51 @@ final class SkatePosePredictionTest {
     }
 
     @Test
+    void localSkeletalAnchorPredictionAdvancesAlongWithTheRenderedRoot() {
+        float[] predicted = SkatePoseCache.Pose.predictPoint(
+                new float[] {1.0f, 2.0f, 3.0f},
+                new float[] {2.0f, 2.5f, 4.0f},
+                1.0f,
+                0.05f,
+                0.025f,
+                new float[] {0.0f, 0.0f, 0.0f});
+
+        assertEquals(2.5f, predicted[0], 1.0e-5f);
+        assertEquals(2.75f, predicted[1], 1.0e-5f);
+        assertEquals(4.5f, predicted[2], 1.0e-5f);
+    }
+
+    @Test
+    void localSkeletalAnchorPredictionUsesRootVelocityWithoutTwoSnapshots() {
+        float[] predicted = SkatePoseCache.Pose.predictPoint(
+                new float[] {1.0f, 2.0f, 3.0f},
+                new float[] {1.0f, 2.0f, 3.0f},
+                1.0f,
+                0.0f,
+                0.025f,
+                new float[] {4.0f, 0.0f, -2.0f});
+
+        assertEquals(1.1f, predicted[0], 1.0e-5f);
+        assertEquals(2.0f, predicted[1], 1.0e-5f);
+        assertEquals(2.95f, predicted[2], 1.0e-5f);
+    }
+
+    @Test
+    void localSkeletalRotationPredictionAdvancesWithTheJointPositions() {
+        float[] predicted = SkatePoseCache.Pose.predictRotation(
+                new float[] {0.0f, 0.0f, 0.0f, 1.0f},
+                new float[] {0.0f, (float) Math.sin(Math.PI / 12.0), 0.0f,
+                        (float) Math.cos(Math.PI / 12.0)},
+                1.0f,
+                0.05f,
+                0.025f);
+        float predictedAngle = 2.0f * (float) Math.atan2(Math.abs(predicted[1]), predicted[3]);
+
+        assertTrue(predictedAngle > (float) (Math.PI / 6.0));
+        assertTrue(predictedAngle < (float) (Math.PI / 3.0));
+    }
+
+    @Test
     void minecraftChaseHeadingUsesTheSkaterBodyRatherThanBoardTrickRotation() {
         SkatePoseCache.accept(state(42, 1.0f));
 
