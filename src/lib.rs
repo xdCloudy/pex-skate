@@ -24,7 +24,7 @@ use pumpkin_plugin_api::{
     text::TextComponent,
     world::{BlockFlags, World},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -46,6 +46,8 @@ const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 // teleport when server-side position has drifted far enough to indicate a
 // discontinuity such as an engine checkpoint respawn.
 const PLAYER_TELEPORT_CORRECTION_DISTANCE_SQUARED: f64 = 4.0;
+const DEFAULT_MAP_SESSION_PREWARM_COUNT: usize = 4;
+const MAX_MAP_SESSION_PREWARM_COUNT: usize = 4;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -93,7 +95,7 @@ struct ServerState {
     pending_loads: HashSet<String>,
     pending_initial_scans: HashMap<String, PendingSkateLoad>,
     prewarmed_world_session: Option<SkateSession>,
-    prewarmed_map_session: Option<(PathBuf, SkateSession)>,
+    prewarmed_map_sessions: Option<(PathBuf, VecDeque<SkateSession>)>,
     engine_accumulator: HashMap<String, f32>,
     engine_updated_at: HashMap<String, Instant>,
     last_broadcast_at: HashMap<String, Instant>,
@@ -189,42 +191,57 @@ impl Plugin for PexSkate {
             .set(data_root)
             .map_err(|_| "Skate data folder was initialized more than once".to_owned())?;
         if let Some(data_root) = DATA_ROOT.get() {
-            let prewarm_started = Instant::now();
-            match SkateSession::load(data_root, Vec::new(), Vec::new(), [0.0; 3], 0.0) {
-                Ok(session) => {
-                    if let Ok(mut state) = server_state().lock() {
-                        state.prewarmed_world_session = Some(session);
-                        eprintln!(
-                            "PEX_SKATE_PREWARM_READY duration_ms={}",
-                            prewarm_started.elapsed().as_millis()
-                        );
-                    }
-                }
-                Err(error) => {
-                    eprintln!("PEX_SKATE_PREWARM_FAILED fallback_to_lazy_load: {error}");
-                }
-            }
             match default_skate_map_path(data_root) {
                 Ok(Some(map_path)) => {
                     let map_prewarm_started = Instant::now();
-                    match SkateSession::load_skate_map(data_root, &map_path) {
-                        Ok(session) => {
-                            let map_key = map_path.canonicalize().unwrap_or(map_path);
-                            if let Ok(mut state) = server_state().lock() {
-                                state.prewarmed_map_session = Some((map_key.clone(), session));
+                    let desired_count = map_session_prewarm_count(data_root);
+                    let map_key = map_path.canonicalize().unwrap_or(map_path);
+                    let mut sessions = VecDeque::with_capacity(desired_count);
+                    for _ in 0..desired_count {
+                        match SkateSession::load_skate_map(data_root, &map_key) {
+                            Ok(session) => sessions.push_back(session),
+                            Err(error) => {
                                 eprintln!(
-                                    "PEX_SKATE_MAP_PREWARM_READY map={} duration_ms={}",
+                                    "PEX_SKATE_MAP_PREWARM_PARTIAL map={} ready={} requested={} fallback_to_lazy_load: {error}",
                                     map_key.display(),
-                                    map_prewarm_started.elapsed().as_millis()
+                                    sessions.len(),
+                                    desired_count
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    if !sessions.is_empty() {
+                        let ready_count = sessions.len();
+                        if let Ok(mut state) = server_state().lock() {
+                            state.prewarmed_map_sessions = Some((map_key.clone(), sessions));
+                            eprintln!(
+                                "PEX_SKATE_MAP_PREWARM_READY map={} sessions={} requested={} duration_ms={}",
+                                map_key.display(),
+                                ready_count,
+                                desired_count,
+                                map_prewarm_started.elapsed().as_millis()
+                            );
+                        }
+                    }
+                }
+                Ok(None) => {
+                    let prewarm_started = Instant::now();
+                    match SkateSession::load(data_root, Vec::new(), Vec::new(), [0.0; 3], 0.0) {
+                        Ok(session) => {
+                            if let Ok(mut state) = server_state().lock() {
+                                state.prewarmed_world_session = Some(session);
+                                eprintln!(
+                                    "PEX_SKATE_PREWARM_READY duration_ms={}",
+                                    prewarm_started.elapsed().as_millis()
                                 );
                             }
                         }
-                        Err(error) => eprintln!(
-                            "PEX_SKATE_MAP_PREWARM_FAILED fallback_to_lazy_load: {error}"
-                        ),
+                        Err(error) => {
+                            eprintln!("PEX_SKATE_PREWARM_FAILED fallback_to_lazy_load: {error}");
+                        }
                     }
                 }
-                Ok(None) => {}
                 Err(error) => eprintln!(
                     "PEX_SKATE_MAP_PREWARM_FAILED fallback_to_lazy_load: {error}"
                 ),
@@ -396,15 +413,24 @@ impl CommandHandler for ToggleSkate {
                     };
                     let map_key = map_path.canonicalize().unwrap_or_else(|_| map_path.clone());
                     let prewarmed_session = server_state().lock().ok().and_then(|mut state| {
-                        state
-                            .prewarmed_map_session
-                            .take()
-                            .and_then(|(prewarmed_path, session)| {
-                                (prewarmed_path == map_key).then_some(session)
-                            })
+                        let pool = state
+                            .prewarmed_map_sessions
+                            .as_mut()
+                            .filter(|(prewarmed_path, _)| *prewarmed_path == map_key)?;
+                        let session = pool.1.pop_front();
+                        let remaining = pool.1.len();
+                        if session.is_some() {
+                            eprintln!(
+                                "PEX_SKATE_MAP_PREWARM_USE map={} remaining={remaining}",
+                                map_key.display()
+                            );
+                        }
+                        if remaining == 0 {
+                            state.prewarmed_map_sessions = None;
+                        }
+                        session
                     });
                     let session = if let Some(session) = prewarmed_session {
-                        eprintln!("PEX_SKATE_MAP_PREWARM_USE map={}", map_key.display());
                         session
                     } else {
                         match SkateSession::load_skate_map(data_root, &map_path) {
@@ -693,6 +719,36 @@ fn default_skate_map_path(data_root: &Path) -> Result<Option<PathBuf>, String> {
         }
     }
     Err(format!("{} is not installed in maps/", selection))
+}
+
+/// Number of retail-map engine sessions prepared during plugin startup. Each
+/// session owns a mutable physics world, so keep the pool bounded and let
+/// operators trade startup time and memory for hitch-free joins.
+fn map_session_prewarm_count(data_root: &Path) -> usize {
+    let path = data_root.join("settings").join("map-session-prewarm.txt");
+    let value = match std::fs::read_to_string(&path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return DEFAULT_MAP_SESSION_PREWARM_COUNT;
+        }
+        Err(error) => {
+            eprintln!(
+                "PEX_SKATE_MAP_PREWARM_SETTING_INVALID path={} fallback={DEFAULT_MAP_SESSION_PREWARM_COUNT}: {error}",
+                path.display()
+            );
+            return DEFAULT_MAP_SESSION_PREWARM_COUNT;
+        }
+    };
+    match value.trim().parse::<usize>() {
+        Ok(count) if count <= MAX_MAP_SESSION_PREWARM_COUNT => count,
+        _ => {
+            eprintln!(
+                "PEX_SKATE_MAP_PREWARM_SETTING_INVALID path={} expected=0..={MAX_MAP_SESSION_PREWARM_COUNT} fallback={DEFAULT_MAP_SESSION_PREWARM_COUNT}",
+                path.display()
+            );
+            DEFAULT_MAP_SESSION_PREWARM_COUNT
+        }
+    }
 }
 
 struct SkateInput;
@@ -2195,6 +2251,37 @@ mod integration_tests {
         assert!(super::default_skate_map_path(&root).is_err());
         std::fs::write(root.join("settings/default-map.txt"), "missing.skate\n").unwrap();
         assert!(super::default_skate_map_path(&root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retail_map_session_prewarm_setting_is_bounded_and_optional() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("pex-skate-prewarm-setting-{nonce}"));
+        std::fs::create_dir_all(root.join("settings")).unwrap();
+
+        assert_eq!(
+            super::map_session_prewarm_count(&root),
+            super::DEFAULT_MAP_SESSION_PREWARM_COUNT
+        );
+        let setting = root.join("settings/map-session-prewarm.txt");
+        std::fs::write(&setting, "2\n").unwrap();
+        assert_eq!(super::map_session_prewarm_count(&root), 2);
+        std::fs::write(&setting, "0\n").unwrap();
+        assert_eq!(super::map_session_prewarm_count(&root), 0);
+        std::fs::write(&setting, "5\n").unwrap();
+        assert_eq!(
+            super::map_session_prewarm_count(&root),
+            super::DEFAULT_MAP_SESSION_PREWARM_COUNT
+        );
+        std::fs::write(&setting, "many\n").unwrap();
+        assert_eq!(
+            super::map_session_prewarm_count(&root),
+            super::DEFAULT_MAP_SESSION_PREWARM_COUNT
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
