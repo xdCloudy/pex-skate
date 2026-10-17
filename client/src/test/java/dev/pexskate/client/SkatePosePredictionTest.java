@@ -144,6 +144,21 @@ final class SkatePosePredictionTest {
     }
 
     @Test
+    void jointRotationPredictionUsesTheShortestQuaternionArc() {
+        float[] predicted = SkatePoseCache.Pose.predictRotation(
+                new float[] {0.0f, 0.0f, 0.0f, 1.0f},
+                new float[] {0.0f, -(float) Math.sin(Math.PI / 12.0), 0.0f,
+                        -(float) Math.cos(Math.PI / 12.0)},
+                1.0f,
+                0.05f,
+                0.025f);
+        float predictedAngle = 2.0f * (float) Math.atan2(Math.abs(predicted[1]), predicted[3]);
+
+        assertTrue(predicted[1] > 0.0f);
+        assertEquals((float) (Math.PI / 4.0), predictedAngle, 1.0e-4f);
+    }
+
+    @Test
     void minecraftChaseHeadingUsesTheSkaterBodyRatherThanBoardTrickRotation() {
         SkatePoseCache.accept(state(42, 1.0f));
 

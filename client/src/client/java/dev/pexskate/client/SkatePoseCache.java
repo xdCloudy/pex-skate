@@ -224,6 +224,7 @@ public final class SkatePoseCache {
                     + first[2] * second[2] + first[3] * second[3];
             if (dot < 0.0f) {
                 for (int i = 0; i < 4; i++) second[i] = -second[i];
+                dot = -dot;
             }
             float sampledTime = interpolation;
             if (snapshotDeltaSeconds > 0.0f && predictionSeconds > 0.0f) {
