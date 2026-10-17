@@ -176,6 +176,15 @@ public final class SkatePoseCache {
             };
         }
 
+        /** World-space simulation root used to place Minecraft's avatar render state. */
+        public float[] rootPosition() {
+            return new float[] {
+                    lerp(a.rootX, b.rootX, t) + b.velocityX * extrapolationSeconds,
+                    lerp(a.rootY, b.rootY, t) + b.velocityY * extrapolationSeconds,
+                    lerp(a.rootZ, b.rootZ, t) + b.velocityZ * extrapolationSeconds
+            };
+        }
+
         /** World-space x/y/z/w rotation for a Skate rig joint. */
         public float[] rotation(int index) {
             if (!has(index)) return null;

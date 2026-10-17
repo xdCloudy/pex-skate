@@ -53,6 +53,17 @@ final class SkatePosePredictionTest {
     }
 
     @Test
+    void sampledRenderRootUsesTheSameAuthoritativePositionAsTheCameraAnchor() {
+        SkatePoseCache.accept(state(42, 1.0f));
+        SkatePoseCache.Pose pose = SkatePoseCache.sampleForRenderCamera(42);
+
+        assertEquals(1.0f, pose.rootPosition()[0]);
+        assertEquals(0.0f, pose.rootPosition()[1]);
+        assertEquals(0.0f, pose.rootPosition()[2]);
+        assertEquals(pose.point(1)[0], pose.rootPosition()[0]);
+    }
+
+    @Test
     void localCameraHeadingPredictionFollowsRecentAngularMotion() {
         float predicted = SkatePoseCache.Pose.predictAngle(0.0f, 0.2f, 1.0f, 0.05f, 0.025f);
 
