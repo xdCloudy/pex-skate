@@ -32,7 +32,11 @@ public abstract class PlayerModelPoseMixin {
         float[] forward = normalize(cross(up, right));
         if (length(up) < 0.5f || length(right) < 0.5f || length(forward) < 0.5f) return;
 
-        model.body.yRot = pose.yaw();
+        // The chase camera follows the torso heading derived from this same
+        // skeletal pose. Board yaw can spin independently during tricks, so
+        // using it for the fallback avatar turns the visible skater away from
+        // the camera's follow direction.
+        model.body.yRot = pose.characterYaw();
         setDownDirection(model.body, subtract(hips, spine), up, right, forward);
 
         float[] head = pose.point(8);

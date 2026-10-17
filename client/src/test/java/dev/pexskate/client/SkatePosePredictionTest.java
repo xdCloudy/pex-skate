@@ -193,11 +193,13 @@ final class SkatePosePredictionTest {
     }
 
     @Test
-    void minecraftChaseHeadingUsesTheSkaterBodyRatherThanBoardTrickRotation() {
+    void chaseCameraAndFallbackAvatarHeadingCanDifferFromBoardTrickRotation() {
         SkatePoseCache.accept(state(42, 1.0f));
 
-        float heading = SkatePoseCache.sample(42, true).characterYaw();
+        SkatePoseCache.Pose pose = SkatePoseCache.sample(42, true);
+        float heading = pose.characterYaw();
 
+        assertEquals(0.0f, pose.yaw(), 1.0e-3f);
         assertEquals(Math.PI, Math.abs(heading), 1.0e-3);
     }
 

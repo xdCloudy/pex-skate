@@ -1,5 +1,10 @@
 Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by SkateGM's portable Rust simulation. This release includes a portable server/client bundle and a Windows helper that converts a Skate 3 Xbox 360 ISO supplied by the user. No game data is included.
 
+### 0.1.0-alpha.75
+
+- Align the fallback Minecraft skater's torso heading with the chase camera's sampled skeletal heading so independent board trick rotation does not turn the avatar away from the camera.
+- Add camera/avatar heading regression coverage.
+
 ### 0.1.0-alpha.74
 
 - Give Space a dedicated PEX right-foot push binding and suppress Minecraft jump only while Skate mode is active, preventing a vanilla jump from competing with Skate physics.
