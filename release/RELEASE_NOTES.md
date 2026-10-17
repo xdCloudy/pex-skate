@@ -15,6 +15,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Gamepad axes and buttons are refreshed through SDL's supported manual update path inside Minecraft's client tick.
 - SHA-256 manifests for the downloadable release files.
 - CI verifies plugin startup and performs the Minecraft 26.3 status handshake against the pinned PEX server.
+- The client waits for a protocol-8 server acknowledgement before sending controls; CI verifies the complete offline player handshake and bidirectional custom payloads against PEX 1.0.0.
 
 ### Install
 
@@ -22,4 +23,4 @@ See `INSTALL.md` in `PEX-Skate-26.3.zip`. Each player needs the Fabric client an
 
 ### Known limitations
 
-This is an alpha and is not production-ready. It has not been validated in a live PEX server/client session using converted Skate 3 data. Board impacts can translate and yaw-rotate authored district props around a shared collision pivot, damp their motion, and synchronize transforms to clients; clients interpolate the received poses between snapshots. Authored mass and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions are not implemented. Multiplayer behavior and long-distance skating still need live gameplay validation.
+This is an alpha and is not production-ready. The PEX client/server handshake is tested against a live PEX process, but gameplay has not been validated in a live Minecraft session using converted Skate 3 data. Board impacts can translate and yaw-rotate authored district props around a shared collision pivot, damp their motion, and synchronize transforms to clients; clients interpolate the received poses between snapshots. Authored mass and hinged doors are not simulated. NPC skaters, several retail visual effects, and some Skate 3 interactions are not implemented. Multiplayer behavior and long-distance skating still need live gameplay validation.
