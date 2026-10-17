@@ -43,6 +43,8 @@ public final class PexSkateClient implements ClientModInitializer {
             CATEGORY
     ));
     private static final KeyMapping PUSH_RIGHT = flickKey("key.pexskate.push_right", InputConstants.KEY_W);
+    private static final KeyMapping PUSH_RIGHT_SPACE = flickKey(
+            "key.pexskate.push_right_space", InputConstants.KEY_SPACE);
     private static final KeyMapping PUSH_LEFT = flickKey("key.pexskate.push_left", InputConstants.KEY_LSHIFT);
     private static final KeyMapping BRAKE = flickKey("key.pexskate.brake", InputConstants.KEY_S);
     private static final KeyMapping STEER_LEFT = flickKey("key.pexskate.steer_left", InputConstants.KEY_A);
@@ -271,7 +273,8 @@ public final class PexSkateClient implements ClientModInitializer {
         if (!skateModeActive || client.options == null) return false;
         return suppressConflictingAction(mapping, client.options.keyDrop, GRAB_LEFT)
                 || suppressConflictingAction(mapping, client.options.keyInventory, GRAB_RIGHT)
-                || suppressConflictingAction(mapping, client.options.keyShift, PUSH_LEFT);
+                || suppressConflictingAction(mapping, client.options.keyShift, PUSH_LEFT)
+                || suppressConflictingAction(mapping, client.options.keyJump, PUSH_RIGHT_SPACE);
     }
 
     private static boolean suppressConflictingAction(KeyMapping mapping, KeyMapping vanilla, KeyMapping skate) {
@@ -308,7 +311,7 @@ public final class PexSkateClient implements ClientModInitializer {
 
         Gamepad pad = readGamepad();
         int flags = 0;
-        if (PUSH_RIGHT.isDown() || client.options.keyJump.isDown() || pad.pushRight()) flags |= 1;
+        if (PUSH_RIGHT.isDown() || PUSH_RIGHT_SPACE.isDown() || pad.pushRight()) flags |= 1;
         if (PUSH_LEFT.isDown() || pad.pushLeft()) flags |= 2;
         if (BRAKE.isDown() || pad.brake()) flags |= 4;
         if (DISMOUNT.isDown() || pad.dismount()) flags |= 0x80;

@@ -12,4 +12,10 @@ class SkateKeyConflictPolicyTest {
         assertFalse(SkateKeyConflictPolicy.shouldSuppress(true, false, true));
         assertFalse(SkateKeyConflictPolicy.shouldSuppress(true, true, false));
     }
+
+    @Test
+    void spacePushDoesNotSuppressVanillaJumpOutsideSkateMode() {
+        assertFalse(SkateKeyConflictPolicy.shouldSuppress(false, true, true));
+        assertTrue(SkateKeyConflictPolicy.shouldSuppress(true, true, true));
+    }
 }
