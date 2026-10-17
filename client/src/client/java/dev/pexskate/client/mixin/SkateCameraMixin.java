@@ -1,6 +1,7 @@
 package dev.pexskate.client.mixin;
 
 import dev.pexskate.client.SkatePoseCache;
+import dev.pexskate.client.SkateMapModel;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.DeltaTracker;
@@ -42,11 +43,17 @@ public abstract class SkateCameraMixin {
         if (hipsPoint == null) return;
         Vec3 hips = new Vec3(hipsPoint[0], hipsPoint[1], hipsPoint[2]);
         Vec3 direction = target.subtract(hips).normalize();
-        if (direction.lengthSqr() > 1.0e-6) {
+        double segmentLength = target.distanceTo(hips);
+        if (direction.lengthSqr() > 1.0e-6 && segmentLength > 1.0e-6) {
+            double closestFraction = SkateMapModel.clipCameraFraction(hips, target);
             var hit = client.level.clip(new ClipContext(
                     hips, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, client.player));
             if (hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
-                target = hit.getLocation().subtract(direction.scale(0.15));
+                closestFraction = Math.min(closestFraction, hips.distanceTo(hit.getLocation()) / segmentLength);
+            }
+            if (closestFraction < 1.0) {
+                double safeFraction = Math.max(0.0, closestFraction - 0.15 / segmentLength);
+                target = hips.lerp(target, safeFraction);
             }
         }
 

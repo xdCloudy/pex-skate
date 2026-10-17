@@ -91,6 +91,85 @@ public final class SkateMapModel {
         return loadingFilename != null && filename != null && loadingFilename.equalsIgnoreCase(filename);
     }
 
+    public static double clipCameraFraction(Vec3 from, Vec3 to) {
+        Model current = model;
+        if (current == null || current.primitives.isEmpty()) return 1.0;
+        long sampleTime = System.nanoTime();
+        double closest = 1.0;
+        Map<Long, PropTransformSample> sampledOffsets = new HashMap<>();
+        for (Primitive primitive : current.primitives) {
+            if (primitive.alphaMode == 2) continue;
+            PropTransformSample offset = propOffset(current, primitive, sampledOffsets, sampleTime);
+            Vec3 localFrom = toPrimitiveLocal(from, offset);
+            Vec3 localTo = toPrimitiveLocal(to, offset);
+            if (!segmentIntersectsBounds(localFrom, localTo, primitive.bounds, closest)) continue;
+            closest = primitive.intersectSegment(localFrom, localTo, closest);
+            if (closest <= 0.0) return 0.0;
+        }
+        return closest;
+    }
+
+    private static Vec3 toPrimitiveLocal(Vec3 point, PropTransformSample offset) {
+        if (offset == null) return point;
+        double x = point.x - offset.x() - offset.pivotX();
+        double z = point.z - offset.z() - offset.pivotZ();
+        double cosYaw = Math.cos(offset.yaw());
+        double sinYaw = Math.sin(offset.yaw());
+        return new Vec3(offset.pivotX() + cosYaw * x - sinYaw * z,
+                point.y - offset.y(), offset.pivotZ() + sinYaw * x + cosYaw * z);
+    }
+
+    private static boolean segmentIntersectsBounds(Vec3 from, Vec3 to, float[] bounds, double maximum) {
+        double lower = 0.0;
+        double upper = maximum;
+        for (int axis = 0; axis < 3; axis++) {
+            double origin = axis == 0 ? from.x : axis == 1 ? from.y : from.z;
+            double destination = axis == 0 ? to.x : axis == 1 ? to.y : to.z;
+            double direction = destination - origin;
+            if (Math.abs(direction) < 1.0e-9) {
+                if (origin < bounds[axis] || origin > bounds[axis + 3]) return false;
+                continue;
+            }
+            double first = (bounds[axis] - origin) / direction;
+            double second = (bounds[axis + 3] - origin) / direction;
+            if (first > second) {
+                double swap = first;
+                first = second;
+                second = swap;
+            }
+            lower = Math.max(lower, first);
+            upper = Math.min(upper, second);
+            if (lower > upper) return false;
+        }
+        return upper >= 0.0 && lower <= maximum;
+    }
+
+    static double segmentTriangleFraction(Vec3 from, Vec3 to,
+                                         double ax, double ay, double az,
+                                         double bx, double by, double bz,
+                                         double cx, double cy, double cz,
+                                         double maximum) {
+        double dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+        double e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+        double e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+        double px = dy * e2z - dz * e2y;
+        double py = dz * e2x - dx * e2z;
+        double pz = dx * e2y - dy * e2x;
+        double determinant = e1x * px + e1y * py + e1z * pz;
+        if (Math.abs(determinant) < 1.0e-9) return Double.POSITIVE_INFINITY;
+        double inverse = 1.0 / determinant;
+        double tx = from.x - ax, ty = from.y - ay, tz = from.z - az;
+        double u = (tx * px + ty * py + tz * pz) * inverse;
+        if (u < 0.0 || u > 1.0) return Double.POSITIVE_INFINITY;
+        double qx = ty * e1z - tz * e1y;
+        double qy = tz * e1x - tx * e1z;
+        double qz = tx * e1y - ty * e1x;
+        double v = (dx * qx + dy * qy + dz * qz) * inverse;
+        if (v < 0.0 || u + v > 1.0) return Double.POSITIVE_INFINITY;
+        double fraction = (e2x * qx + e2y * qy + e2z * qz) * inverse;
+        return fraction >= 0.0 && fraction <= maximum ? fraction : Double.POSITIVE_INFINITY;
+    }
+
     static void loadMap(String requestedFilename) {
         loadMap(requestedFilename, "", "");
     }
@@ -1263,6 +1342,21 @@ public final class SkateMapModel {
                     offset == null ? (bounds[0] + bounds[3]) * 0.5 : transformedCenterX(offset),
                     (bounds[1] + bounds[4]) * 0.5 + (offset == null ? 0.0f : offset.y()),
                     offset == null ? (bounds[2] + bounds[5]) * 0.5 : transformedCenterZ(offset));
+        }
+
+        private double intersectSegment(Vec3 from, Vec3 to, double maximum) {
+            double closest = maximum;
+            for (int index = 0; index < indices.length; index += 3) {
+                int a = indices[index] * 3;
+                int b = indices[index + 1] * 3;
+                int c = indices[index + 2] * 3;
+                double hit = segmentTriangleFraction(from, to,
+                        positions[a], positions[a + 1], positions[a + 2],
+                        positions[b], positions[b + 1], positions[b + 2],
+                        positions[c], positions[c + 1], positions[c + 2], closest);
+                if (hit < closest) closest = hit;
+            }
+            return closest;
         }
 
         private void draw(PoseStack.Pose pose, VertexConsumer output, int light, PropTransformSample offset) {
