@@ -380,7 +380,7 @@ def play_until_ack(
                 state_count += 1
                 if state.active:
                     if not skate_active:
-                        print("PEX Skate state active=true; checking movement and stock Ollie input.")
+                        print("PEX Skate state active=true; checking movement and stock right-stick trick input.")
                         active_started_at = time.monotonic()
                         first_state = state
                     skate_active = True
@@ -459,7 +459,7 @@ def play_until_ack(
                             )
                         if not saw_trick:
                             raise RuntimeError(
-                                "PEX consumed the stock Ollie flick but reported no trick or score "
+                                "PEX consumed stock right-stick gesture input but reported no trick or score "
                                 f"(trick={last_state.trick_name!r}, "
                                 f"sequence={last_state.sequence_score:.1f}, "
                                 f"line={last_state.line_score:.1f}, "
