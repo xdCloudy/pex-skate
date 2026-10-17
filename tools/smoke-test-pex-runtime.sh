@@ -52,6 +52,10 @@ if [[ -n "$converted_data" ]]; then
       cp -a "$converted_data/$entry" "$data_root/"
     fi
   done
+  if [[ -n "${PEX_SKATE_SMOKE_MAP:-}" ]]; then
+    mkdir -p "$data_root/settings"
+    printf '%s\n' "$PEX_SKATE_SMOKE_MAP" > "$data_root/settings/default-map.txt"
+  fi
 fi
 plugin_sha256=$(sha256sum "$work_dir/plugins/pex-skate.wasm" | cut -d ' ' -f 1)
 printf '{"entries":{"%s":{"permissions_requested":["fs.read.data"],"approved":true}}}\n' \
@@ -103,8 +107,9 @@ if [[ -z "$module_cache" ]]; then
 fi
 
 if [[ -n "$converted_data" ]]; then
-  if ! python3 "$script_dir/test_pex_payload_client.py" --exercise-skate --exercise-timeout 180; then
-    cat server.log
+  exercise_timeout=${PEX_SKATE_SMOKE_TIMEOUT_SECONDS:-180}
+  if ! python3 "$script_dir/test_pex_payload_client.py" --exercise-skate --exercise-timeout "$exercise_timeout"; then
+    tail -n 12 server.log | cut -c1-1200
     exit 1
   fi
 else

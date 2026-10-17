@@ -19,6 +19,7 @@ use pumpkin_plugin_api::{
         server::ServerTickEndEvent,
     },
     permissions,
+    permission::{Permission, PermissionDefault},
     text::TextComponent,
 };
 use std::collections::{HashMap, HashSet};
@@ -162,8 +163,16 @@ impl Plugin for PexSkate {
         DATA_ROOT
             .set(data_root)
             .map_err(|_| "Skate data folder was initialized more than once".to_owned())?;
+        context
+            .register_permission(&Permission {
+                node: "pex-skate:use".into(),
+                description: "Allows players to enter or leave PEX Skate mode.".into(),
+                default: PermissionDefault::Allow,
+                children: Default::default(),
+            })
+            .map_err(|error| format!("could not register the Skate gameplay permission: {error}"))?;
         let command = Command::new(&["skate".into()], "Toggle PEX Skate mode").execute(ToggleSkate);
-        context.register_command(command, "");
+        context.register_command(command, "pex-skate:use");
 
         context
             .register_event_handler::<PlayerCustomPayloadEvent, _>(

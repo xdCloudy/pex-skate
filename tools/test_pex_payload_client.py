@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import socket
 import struct
 import sys
@@ -209,7 +210,6 @@ def config_settings() -> bytes:
 def config_step(client: MinecraftConnection) -> None:
     while True:
         packet_id, body = client.receive()
-        print(f"Minecraft configuration packet {packet_id:#04x} ({len(body)} bytes).")
         if packet_id == 0x02:  # Disconnect.
             raise ConnectionError(f"server rejected configuration: {body[:64].hex()}")
         if packet_id == 0x03:  # Finish configuration.
@@ -256,9 +256,17 @@ def play_until_ack(
             packet_id, body = client.receive()
         except TimeoutError:
             continue
-        print(f"Minecraft play packet {packet_id:#04x} ({len(body)} bytes).")
         if packet_id == PLAY_CLIENTBOUND_DISCONNECT:
             raise ConnectionError(f"server disconnected the play client: {body[:64].hex()}")
+        if packet_id == 0x7C:  # Minecraft 26.3 system chat.
+            fragments = [part.decode("utf-8", errors="replace") for part in re.findall(rb"[\x20-\x7e]{4,}", body)]
+            chat_text = " | ".join(fragments)
+            if "command.unknown.command" in chat_text:
+                raise ConnectionError("PEX did not expose the /skate command to this player")
+            if "Wasm command failed" in chat_text:
+                raise ConnectionError(f"PEX /skate command failed: {chat_text[:1000]}")
+            if chat_text:
+                print(f"Minecraft system chat: {chat_text[:240]}")
         if packet_id == PLAY_CLIENTBOUND_LOGIN and not saw_login:
             saw_login = True
             client.send(PLAY_SERVERBOUND_PLAYER_LOADED)
@@ -269,6 +277,7 @@ def play_until_ack(
             channel_length, offset = decode_varint(body)
             channel = body[offset:offset + channel_length].decode("utf-8")
             payload = body[offset + channel_length:]
+            print(f"Minecraft custom payload {channel} ({len(payload)} bytes).")
             if channel == "pexskate:hello_ack":
                 if payload != bytes([SKATE_PROTOCOL_VERSION]):
                     raise ValueError(f"server acknowledged unexpected Skate protocol {payload.hex()}")
@@ -282,6 +291,7 @@ def play_until_ack(
             elif channel == "pexskate:state" and exercise_skate:
                 active, acknowledged_sequence = decode_skate_state(payload)
                 if active:
+                    print(f"PEX Skate state active=true, acknowledged_sequence={acknowledged_sequence}.")
                     skate_active = True
                     now = time.monotonic()
                     if now >= next_control_at:
@@ -305,8 +315,16 @@ def play_until_ack(
         elif packet_id == PLAY_CLIENTBOUND_PING:
             client.send(PLAY_SERVERBOUND_PONG, body)
         elif packet_id == PLAY_CLIENTBOUND_POSITION:
-            teleport_id, _ = decode_varint(body)
-            client.send(PLAY_SERVERBOUND_TELEPORT_CONFIRM, encode_varint(teleport_id))
+            teleport_id, offset = decode_varint(body)
+            # Minecraft 26.3's Teleport Confirm echoes the accepted position
+            # and rotation, in addition to the teleport ID. The preceding
+            # serverbound packet also includes delta movement and relative
+            # flags, which are intentionally not echoed.
+            if len(body) - offset != 6 * 8 + 2 * 4 + 4:
+                raise ValueError("unexpected Minecraft 26.3 player-position packet length")
+            x, y, z, _dx, _dy, _dz, yaw, pitch = struct.unpack_from(">6d2f", body, offset)
+            confirmation = encode_varint(teleport_id) + struct.pack(">3d2f", x, y, z, yaw, pitch)
+            client.send(PLAY_SERVERBOUND_TELEPORT_CONFIRM, confirmation)
         elif packet_id == 0x76:  # Server returned to configuration.
             client.send(0x10)  # Acknowledge configuration transition.
             config_step(client)

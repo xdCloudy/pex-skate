@@ -1,5 +1,12 @@
 Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by SkateGM's portable Rust simulation. This release includes a portable server/client bundle and a Windows helper that converts a Skate 3 Xbox 360 ISO supplied by the user. No game data is included.
 
+### Fixes in this build
+
+- Register the `/skate` command behind a dedicated permission granted to players by default. Previously, PEX hid the command from regular players because the permission node was empty.
+- Raise the WASM guest stack to 8 MiB so SkateGM's stock physics and animation data can initialize inside the PEX runtime.
+- The PEX runtime smoke client now replies to Minecraft 26.3 teleport requests with the accepted position and rotation. It also reports system chat and Skate state payloads when diagnosing gameplay activation.
+- The data-backed runtime smoke test timeout can be shortened with `PEX_SKATE_SMOKE_TIMEOUT_SECONDS`.
+
 ### What's included
 
 - Server-authoritative skating physics, tricks, animations, score state, and third-person camera presentation.
