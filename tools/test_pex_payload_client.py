@@ -182,7 +182,7 @@ def config_step(client: MinecraftConnection) -> None:
             key_length, offset = decode_varint(body)
             key = body[offset:offset + key_length]
             client.send(0x01, encode_string(key.decode("utf-8")) + b"\x00")
-        elif packet_id == 0x0E:  # Select known packs; advertise none and receive full registries.
+        elif packet_id == 0x0F:  # PEX 1.0.0 select-known-packs; request full registries.
             client.send(0x07, b"\x00")
         elif packet_id == 0x13:  # Code of conduct; accept it for this disposable local test.
             client.send(0x09)
