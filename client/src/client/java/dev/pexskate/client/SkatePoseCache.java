@@ -15,10 +15,10 @@ public final class SkatePoseCache {
     private static final long DEFAULT_LOCAL_PREDICTION_LEAD_NANOS = 25_000_000L;
     private static final long MAX_INTERPOLATION_GAP_NANOS = 500_000_000L;
     private static final float SNAP_DISTANCE_SQUARED = 64.0f;
-    // Server pose snapshots are produced on 20 Hz ticks. Client packet tasks
-    // can be drained together, so receipt timestamps shorter than half a tick
-    // must not be treated as the actual simulation interval for pose prediction.
-    private static final float MIN_PREDICTION_SAMPLE_SECONDS = 0.025f;
+    // Server pose snapshots are broadcast at 20 Hz. Client packet tasks can be
+    // drained together, so receipt timestamps shorter than one broadcast
+    // interval must not be treated as the simulation interval for prediction.
+    private static final float MIN_PREDICTION_SAMPLE_SECONDS = 0.050f;
     // The RTT-derived lead compensates for the age of the server snapshot at
     // receipt. It is added to render time since receipt, rather than only
     // limiting that elapsed time; otherwise a fresh packet still renders an

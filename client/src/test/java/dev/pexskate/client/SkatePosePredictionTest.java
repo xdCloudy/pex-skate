@@ -111,7 +111,7 @@ final class SkatePosePredictionTest {
                 0.025f,
                 new float[] {0.0f, 0.0f, 0.0f});
 
-        assertEquals(0.2f, predicted[0], 1.0e-5f);
+        assertEquals(0.15f, predicted[0], 1.0e-5f);
     }
 
     @Test
@@ -140,7 +140,7 @@ final class SkatePosePredictionTest {
                 0.025f);
         float predictedAngle = 2.0f * (float) Math.atan2(Math.abs(predicted[1]), predicted[3]);
 
-        assertEquals((float) (Math.PI / 3.0), predictedAngle, 1.0e-4f);
+        assertEquals((float) (Math.PI / 4.0), predictedAngle, 1.0e-4f);
     }
 
     @Test

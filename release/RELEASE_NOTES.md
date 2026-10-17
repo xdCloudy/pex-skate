@@ -1,5 +1,11 @@
 Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by SkateGM's portable Rust simulation. This release includes a portable server/client bundle and a Windows helper that converts a Skate 3 Xbox 360 ISO supplied by the user. No game data is included.
 
+### 0.1.0-alpha.72
+
+- Match the local skeletal prediction floor to the server's 50 ms pose broadcast interval to avoid overestimating motion when client packet tasks arrive together.
+- Update regression coverage for burst-arrival position and rotation predictions.
+- The camera change still needs live visual validation in Minecraft; this remains an alpha build.
+
 ### 0.1.0-alpha.71
 
 - Correct shortest-arc quaternion prediction for local skeletal joints when equivalent quaternion signs differ.
