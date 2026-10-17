@@ -260,6 +260,23 @@ public final class PexSkateClient implements ClientModInitializer {
         return skateModeActive;
     }
 
+    /** Suppress only the vanilla actions whose active Skate bindings collide. */
+    public static boolean shouldSuppressVanillaKey(KeyMapping mapping, Minecraft client) {
+        if (!skateModeActive || client.options == null) return false;
+        return suppressConflictingAction(mapping, client.options.keyDrop, GRAB_LEFT)
+                || suppressConflictingAction(mapping, client.options.keyInventory, GRAB_RIGHT)
+                || suppressConflictingAction(mapping, client.options.keyShift, PUSH_LEFT);
+    }
+
+    private static boolean suppressConflictingAction(KeyMapping mapping, KeyMapping vanilla, KeyMapping skate) {
+        return sameBinding(mapping, vanilla, skate)
+                && SkateKeyConflictPolicy.shouldSuppress(skateModeActive, true, skate.isDown());
+    }
+
+    private static boolean sameBinding(KeyMapping vanilla, KeyMapping skate, KeyMapping action) {
+        return vanilla == skate && vanilla.same(action);
+    }
+
     private static void clearBoards() {
         BOARDS.values().forEach(ItemDisplay::discard);
         BOARDS.clear();
