@@ -54,4 +54,27 @@ class SkateboardItemModelTest {
             assertTrue(cuboidCorners > 0, "model contains cuboid corners");
         }
     }
+
+    @Test
+    void keepsEveryFaceUvInsideTheSixteenPixelTextureBounds() throws IOException {
+        try (InputStream input = getClass().getResourceAsStream(
+                "/assets/pexskate/models/item/skateboard.json")) {
+            assertTrue(input != null, "skateboard item model resource is present");
+            String model = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            Matcher uvs = Pattern.compile("\\\"uv\\\"\\s*:\\s*\\[([^\\]]+)\\]")
+                    .matcher(model);
+            int faceCount = 0;
+            while (uvs.find()) {
+                String[] coordinates = uvs.group(1).split(",");
+                assertEquals(4, coordinates.length, "each face UV has four coordinates");
+                for (String coordinate : coordinates) {
+                    double value = Double.parseDouble(coordinate.trim());
+                    assertTrue(value >= 0.0 && value <= 16.0,
+                            "face UV must stay inside the 16x16 texture: " + value);
+                }
+                faceCount++;
+            }
+            assertEquals(42, faceCount, "every face of all seven cuboids has explicit UVs");
+        }
+    }
 }

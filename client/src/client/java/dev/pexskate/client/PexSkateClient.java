@@ -200,7 +200,7 @@ public final class PexSkateClient implements ClientModInitializer {
         if (SkateSkaterModel.isReady()) {
             // The converted retail GLB includes the deck, trucks, and wheels,
             // all skinned to the Skate engine's board joints. Keep the
-            // pressure-plate display only as the no-assets fallback.
+            // simple item display only as the no-assets fallback.
             if (board != null) board.discard();
             BOARDS.remove(state.entityId());
         } else {
@@ -212,7 +212,10 @@ public final class PexSkateClient implements ClientModInitializer {
                 board.setNoGravity(true);
                 board.setTransformationInterpolationDuration(3);
                 board.setPosRotInterpolationDuration(3);
-                ItemStack boardItem = new ItemStack(Items.OAK_PRESSURE_PLATE);
+                // Use an item-atlas base item. A block item here pulls the
+                // blocks atlas into the custom item model and Minecraft 26.3
+                // rejects the model for mixing atlas textures.
+                ItemStack boardItem = new ItemStack(Items.PAPER);
                 boardItem.set(DataComponents.ITEM_MODEL, BOARD_MODEL);
                 board.setItemStack(boardItem);
                 client.level.addEntity(board);

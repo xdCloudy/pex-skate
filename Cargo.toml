@@ -1,6 +1,6 @@
 [package]
 name = "pex-skate"
-version = "0.1.0-alpha.75"
+version = "0.1.0-alpha.76"
 edition = "2024"
 publish = false
 description = "A portable PEX server plugin for the experimental PEX Skate client/server bridge."
