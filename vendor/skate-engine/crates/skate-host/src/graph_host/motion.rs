@@ -434,3 +434,7 @@ mod finger_flip_tests;
 #[cfg(test)]
 #[path = "tests/motion_board_adjust.rs"]
 mod board_adjust_tests;
+
+#[cfg(test)]
+#[path = "tests/motion_tricks.rs"]
+mod tricks_tests;

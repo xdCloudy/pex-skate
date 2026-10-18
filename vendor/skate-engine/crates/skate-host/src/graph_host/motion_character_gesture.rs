@@ -10,7 +10,7 @@ use skate_core::animation::{
 };
 use skate_core::graph::intents::IntentMap;
 
-const CHANNELS: [&str; 3] = ["GestureBoth", "GestureRight", "GestureLeft"];
+pub(super) const CHANNELS: [&str; 3] = ["GestureBoth", "GestureRight", "GestureLeft"];
 const TENTH: f32 = f32::from_bits(0x3DCC_CCCD);
 
 pub struct CharacterGestureInputs<'a> {

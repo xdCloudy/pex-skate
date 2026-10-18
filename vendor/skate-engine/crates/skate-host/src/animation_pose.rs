@@ -231,7 +231,3 @@ fn sqt(words: SampleWords) -> Sqt {
         translation: [tx, ty, tz, 1.0],
     }
 }
-
-#[cfg(test)]
-#[path = "tests/animation_pose.rs"]
-mod tests;

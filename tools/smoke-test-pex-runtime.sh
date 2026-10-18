@@ -4,18 +4,38 @@ set -euo pipefail
 plugin=${1:?usage: smoke-test-pex-runtime.sh <pex-skate.wasm> [converted-data-folder]}
 converted_data=${2:-}
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-server_version=v1.0.0
-server_sha256=198ec31b4fb96ac51970ca5366691da2b44add2954ab55ee0bda446423ed50ba
+server_version=v1.1.0
+server_sha256=fa23f93ed9be9bfff23f7be2d0699d27f880f2ee3d96ea47864d81f07b3592d6
 server_name=pumpkin-X64-Linux
 server_url="https://github.com/Conman1533/PEX/releases/download/${server_version}/${server_name}"
 spawn_protection=${PEX_SKATE_SMOKE_SPAWN_PROTECTION:-16}
+spawn_y=${PEX_SKATE_SMOKE_SPAWN_Y:-128}
+player_spacing=${PEX_SKATE_SMOKE_PLAYER_SPACING:-}
+smoke_players=${PEX_SKATE_SMOKE_PLAYERS:-1}
+if [[ ! "$smoke_players" =~ ^[0-9]+$ ]] || (( 10#$smoke_players < 1 || 10#$smoke_players > 4 )); then
+  echo "PEX_SKATE_SMOKE_PLAYERS must be an integer from 1 through 4" >&2
+  exit 2
+fi
+if [[ -z "$player_spacing" ]]; then
+  # Separate gameplay smoke clients so their synthetic skate sessions do not
+  # start with overlapping board/skater collision bodies at world spawn.
+  if (( 10#$smoke_players > 1 )); then player_spacing=16; else player_spacing=0; fi
+fi
 if [[ ! "$spawn_protection" =~ ^[0-9]+$ ]]; then
   echo "PEX_SKATE_SMOKE_SPAWN_PROTECTION must be a non-negative integer" >&2
   exit 2
 fi
-smoke_players=${PEX_SKATE_SMOKE_PLAYERS:-1}
-if [[ ! "$smoke_players" =~ ^[0-9]+$ ]] || (( 10#$smoke_players < 1 || 10#$smoke_players > 4 )); then
-  echo "PEX_SKATE_SMOKE_PLAYERS must be an integer from 1 through 4" >&2
+if [[ ! "$spawn_y" =~ ^[0-9]+$ ]]; then
+  echo "PEX_SKATE_SMOKE_SPAWN_Y must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ ! "$player_spacing" =~ ^[0-9]+$ ]]; then
+  echo "PEX_SKATE_SMOKE_PLAYER_SPACING must be a non-negative integer" >&2
+  exit 2
+fi
+smoke_control_only=${PEX_SKATE_SMOKE_CONTROL_ONLY:-0}
+if [[ "$smoke_control_only" != "0" && "$smoke_control_only" != "1" ]]; then
+  echo "PEX_SKATE_SMOKE_CONTROL_ONLY must be 0 or 1" >&2
   exit 2
 fi
 work_dir=$(mktemp -d)
@@ -36,6 +56,10 @@ stop_server() {
 
 cleanup() {
   stop_server
+  if [[ -n "${PEX_SKATE_SMOKE_LOG_OUTPUT:-}" && -f server.log ]]; then
+    mkdir -p "$(dirname "$PEX_SKATE_SMOKE_LOG_OUTPUT")"
+    cp server.log "$PEX_SKATE_SMOKE_LOG_OUTPUT"
+  fi
   rm -rf "$work_dir"
 }
 trap cleanup EXIT
@@ -140,14 +164,22 @@ run_smoke_players() {
   local exercise_timeout=${2:-}
   local player_index
   local player_pid
+  local player_spawn_offset
   local player_failed=0
   local -a player_pids=()
   for ((player_index = 1; player_index <= smoke_players; player_index++)); do
     local -a player_args=(--username "PexSkateSmoke${player_index}")
     if [[ "$exercise_skate" == true ]]; then
       player_args+=(--exercise-skate --exercise-timeout "$exercise_timeout"
-        --exercise-duration "${PEX_SKATE_SMOKE_GAMEPLAY_DURATION:-3}"
-        --asset-root "$data_root/private")
+        --exercise-duration "${PEX_SKATE_SMOKE_GAMEPLAY_DURATION:-5}"
+        --asset-root "$data_root/private" --spawn-y "$spawn_y")
+      if (( player_spacing > 0 )); then
+        player_spawn_offset=$(((player_index - 1) * player_spacing))
+        player_args+=(--spawn-offset "$player_spawn_offset")
+      fi
+      if [[ "$smoke_control_only" == "1" ]]; then
+        player_args+=(--control-only)
+      fi
     fi
     python3 "$script_dir/test_pex_payload_client.py" "${player_args[@]}" &
     player_pids+=("$!")
@@ -165,18 +197,26 @@ run_server_smoke() {
   if [[ -n "$map_name" ]]; then
     mkdir -p "$data_root/settings"
     printf '%s\n' "$map_name" > "$data_root/settings/default-map.txt"
+    if [[ "$map_name" == "minecraft" ]]; then
+      # Pumpkin's disposable test world may not have generated terrain. Give
+      # control-only multiplayer smoke clients a small collision surface.
+      printf 'temporary test fixture\n' > "$data_root/settings/smoke-platform.txt"
+    fi
+    if [[ "${PEX_SKATE_SMOKE_DIAGNOSTICS:-0}" == "1" ]]; then
+      printf 'temporary diagnostic fixture\n' > "$data_root/settings/smoke-diagnostics.txt"
+    fi
   fi
 
   start_server
   if [[ -n "$converted_data" ]]; then
     local exercise_timeout=${PEX_SKATE_SMOKE_TIMEOUT_SECONDS:-180}
     if ! run_smoke_players true "$exercise_timeout"; then
-      grep -E 'MAP_READ_TIMING|IW4L_SKATE_LOAD|SKATE_PHYSICS_MODE|SKATE_GRIND_READY|Can.t keep up' server.log | tail -n 60 || true
-      tail -n 12 server.log | cut -c1-1200
+      grep -E 'MAP_READ_TIMING|IW4L_SKATE_LOAD|SKATE_PHYSICS_MODE|SKATE_GRIND_READY|PEX_SKATE_PREWARM|Can.t keep up' server.log | tail -n 60 || true
+      tail -n 80 server.log | cut -c1-1200
       return 1
     fi
     echo "Skate data/session initialization timings:"
-    grep -E 'MAP_READ_TIMING|IW4L_SKATE_LOAD|SKATE_PHYSICS_MODE|SKATE_GRIND_READY|Can.t keep up' server.log | tail -n 60 || true
+    grep -E 'MAP_READ_TIMING|IW4L_SKATE_LOAD|SKATE_PHYSICS_MODE|SKATE_GRIND_READY|PEX_SKATE_PREWARM|Can.t keep up' server.log | tail -n 60 || true
     python3 "$script_dir/check_pex_status.py"
     echo "PEX $server_version loaded ${map_name:-the default Skate map}, activated $smoke_players engine session(s), consumed client controls, and passed the status handshake."
   else
@@ -206,7 +246,11 @@ if [[ -n "$converted_data" ]]; then
       run_server_smoke "$map_name"
     done
   else
-    run_server_smoke "${PEX_SKATE_SMOKE_MAP:-}"
+    # A freshly generated Pumpkin test world may not have terrain at the
+    # player's spawn. Keep the default data-backed gameplay smoke deterministic
+    # by selecting Minecraft-world mode and placing the temporary test platform.
+    # Callers can still select a retail district with PEX_SKATE_SMOKE_MAP.
+    run_server_smoke "${PEX_SKATE_SMOKE_MAP:-minecraft}"
   fi
 else
   run_server_smoke

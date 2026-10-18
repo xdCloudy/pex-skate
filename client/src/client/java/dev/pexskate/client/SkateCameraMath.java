@@ -6,9 +6,29 @@ import net.minecraft.world.phys.Vec3;
 public final class SkateCameraMath {
     private SkateCameraMath() {}
 
-    public static Vec3 minecraftChasePosition(Vec3 hips, float yaw) {
+    public static Vec3 minecraftChasePosition(Vec3 root, float yaw) {
         Vec3 forward = new Vec3(-Math.sin(yaw), 0.0, Math.cos(yaw));
-        return hips.subtract(forward.scale(4.0)).add(0.0, 1.55, 0.0);
+        return root.subtract(forward.scale(4.0)).add(0.0, 1.55, 0.0);
+    }
+
+    public static Vec3 minecraftChaseLookAt(Vec3 root) {
+        return root.add(0.0, 0.75, 0.0);
+    }
+
+    public static boolean isFinite(Vec3 vector) {
+        return Double.isFinite(vector.x) && Double.isFinite(vector.y) && Double.isFinite(vector.z);
+    }
+
+    public static boolean isFinite(Rotation rotation) {
+        return Float.isFinite(rotation.yaw()) && Float.isFinite(rotation.pitch());
+    }
+
+    public static boolean isFiniteViewVector(float x, float y, float z, float w) {
+        return Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z) && Float.isFinite(w);
+    }
+
+    public static boolean hasFrustumOffsetProgress(float x, float y, float z, float w) {
+        return isFiniteViewVector(x, y, z, w) && Math.abs(z) >= 0.05f;
     }
 
     public static Rotation lookAt(Vec3 camera, Vec3 target) {

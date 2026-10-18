@@ -78,6 +78,9 @@ pub enum MotionCondition {
     /// resolved physical flag and must remain false until a moving support is
     /// published by the collision owner.
     IsStandingOnMovingObject,
+    /// Vehicle-specific predicates return false when there is no moving
+    /// object publication, as they do in the default Minecraft world.
+    MovingObjectPredicate(&'static str),
     /// IsInDebugAnimationsMode is a retail debug gate. TU3 has no gameplay
     /// producer for this flag; the shipped runtime never enables debug
     /// animation mode, so the condition is a resolved false leaf rather than
@@ -185,6 +188,12 @@ impl MotionCondition {
             "IsBipedGroundThin" => Self::IsBipedGroundThin,
             "IsHoldingSkateboard" => Self::IsHoldingSkateboard,
             "IsStandingOnMovingObject" => Self::IsStandingOnMovingObject,
+            "AngleAdjustByAnimationEndLessThan" => {
+                Self::MovingObjectPredicate("AngleAdjustByAnimationEndLessThan")
+            }
+            "SkitchingPosition" => Self::MovingObjectPredicate("SkitchingPosition"),
+            "IsSkitchingWithAbsorb" => Self::MovingObjectPredicate("IsSkitchingWithAbsorb"),
+            "IsSkitchShimmying" => Self::MovingObjectPredicate("IsSkitchShimmying"),
             "IsInDebugAnimationsMode" => Self::DebugAnimationsMode,
             name if super::motion_stock_conditions::Condition::recognizes(name) => {
                 Self::StockGameplay(super::motion_stock_conditions::Condition::parse(a))
@@ -260,6 +269,13 @@ impl MotionCondition {
                 .gameplay_conditions
                 .ok_or("IsStandingOnMovingObject requires the physical state publication")?
                 .moving_object,
+            Self::MovingObjectPredicate(name) => {
+                let moving_object = host
+                    .gameplay_conditions
+                    .ok_or("moving-object predicate requires the physical state publication")?
+                    .moving_object;
+                moving_object_predicate(*name, moving_object)?
+            }
             Self::StockGameplay(condition) => condition.evaluate(host)?,
             Self::PushOff(condition) => condition.evaluate(),
             Self::Wipeout(condition) => condition.evaluate(host.wipeout_physical)?,
@@ -402,6 +418,39 @@ impl MotionCondition {
                 }
             }
         })
+    }
+}
+
+fn moving_object_predicate(name: &str, moving_object: bool) -> Result<bool, String> {
+    if !moving_object {
+        return Ok(false);
+    }
+    Err(format!(
+        "MotionGraph condition {name} requires the moving-object physical adapter"
+    ))
+}
+
+#[cfg(test)]
+mod moving_object_predicate_tests {
+    use super::moving_object_predicate;
+
+    #[test]
+    fn vehicle_predicates_are_false_without_a_moving_object() {
+        for name in [
+            "AngleAdjustByAnimationEndLessThan",
+            "SkitchingPosition",
+            "IsSkitchingWithAbsorb",
+            "IsSkitchShimmying",
+        ] {
+            assert_eq!(moving_object_predicate(name, false), Ok(false));
+        }
+    }
+
+    #[test]
+    fn active_vehicle_predicates_report_the_missing_physical_adapter() {
+        let error = moving_object_predicate("SkitchingPosition", true).unwrap_err();
+        assert!(error.contains("SkitchingPosition"));
+        assert!(error.contains("moving-object physical adapter"));
     }
 }
 

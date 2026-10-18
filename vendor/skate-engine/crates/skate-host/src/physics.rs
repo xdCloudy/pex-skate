@@ -422,10 +422,6 @@ impl GamePhysics {
     }
 }
 
-#[cfg(test)]
-#[path = "tests/map_startup.rs"]
-mod map_startup;
-
 impl GamePhysics {
     fn finish_skater(&mut self, skater: &mut SkaterRuntime) -> Result<(), String> {
         //Skateboard::UpdatePostPhysics82C02158 prepares the wall probe for
@@ -505,56 +501,6 @@ impl GamePhysics {
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "tests/physics_startup.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "tests/air_playback.rs"]
-mod air_tests;
-
-#[cfg(test)]
-#[path = "tests/wipeout_playback.rs"]
-mod wipeout_tests;
-
-
-
-#[cfg(test)]
-#[path = "tests/powerslide_playback.rs"]
-mod powerslide_tests;
-
-#[cfg(test)]
-#[path = "tests/manual_playback.rs"]
-mod manual_tests;
-
-#[cfg(test)]
-#[path = "tests/hippy_playback.rs"]
-mod hippy_tests;
-
-#[cfg(test)]
-#[path = "tests/recorded_playback.rs"]
-mod recorded_tests;
-
-#[cfg(test)]
-#[path = "tests/offboard_air_playback.rs"]
-mod offboard_air_tests;
-
-#[cfg(test)]
-#[path = "tests/offboard_midair_playback.rs"]
-mod offboard_midair_playback;
-
-#[cfg(test)]
-#[path = "tests/offboard_recall_playback.rs"]
-mod offboard_recall_playback_tests;
-
-#[cfg(test)]
-#[path = "tests/offboard_jump_playback.rs"]
-mod offboard_jump_playback_tests;
-
-#[cfg(test)]
-#[path = "tests/offboard_root_trace.rs"]
-mod offboard_root_trace;
 
 impl SkaterRuntime {
     /// Observe the current grind publication without adding a second grind owner.

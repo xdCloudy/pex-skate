@@ -43,6 +43,8 @@ public final class PexSkateClient implements ClientModInitializer {
             CATEGORY
     ));
     private static final KeyMapping PUSH_RIGHT = flickKey("key.pexskate.push_right", InputConstants.KEY_W);
+    private static final KeyMapping PUSH_RIGHT_SPACE = flickKey(
+            "key.pexskate.push_right_space", InputConstants.KEY_SPACE);
     private static final KeyMapping PUSH_LEFT = flickKey("key.pexskate.push_left", InputConstants.KEY_LSHIFT);
     private static final KeyMapping BRAKE = flickKey("key.pexskate.brake", InputConstants.KEY_S);
     private static final KeyMapping STEER_LEFT = flickKey("key.pexskate.steer_left", InputConstants.KEY_A);
@@ -198,7 +200,7 @@ public final class PexSkateClient implements ClientModInitializer {
         if (SkateSkaterModel.isReady()) {
             // The converted retail GLB includes the deck, trucks, and wheels,
             // all skinned to the Skate engine's board joints. Keep the
-            // pressure-plate display only as the no-assets fallback.
+            // simple item display only as the no-assets fallback.
             if (board != null) board.discard();
             BOARDS.remove(state.entityId());
         } else {
@@ -210,7 +212,10 @@ public final class PexSkateClient implements ClientModInitializer {
                 board.setNoGravity(true);
                 board.setTransformationInterpolationDuration(3);
                 board.setPosRotInterpolationDuration(3);
-                ItemStack boardItem = new ItemStack(Items.OAK_PRESSURE_PLATE);
+                // Use an item-atlas base item. A block item here pulls the
+                // blocks atlas into the custom item model and Minecraft 26.3
+                // rejects the model for mixing atlas textures.
+                ItemStack boardItem = new ItemStack(Items.PAPER);
                 boardItem.set(DataComponents.ITEM_MODEL, BOARD_MODEL);
                 board.setItemStack(boardItem);
                 client.level.addEntity(board);
@@ -271,7 +276,18 @@ public final class PexSkateClient implements ClientModInitializer {
         if (!skateModeActive || client.options == null) return false;
         return suppressConflictingAction(mapping, client.options.keyDrop, GRAB_LEFT)
                 || suppressConflictingAction(mapping, client.options.keyInventory, GRAB_RIGHT)
-                || suppressConflictingAction(mapping, client.options.keyShift, PUSH_LEFT);
+                || suppressConflictingAction(mapping, client.options.keyShift, PUSH_LEFT)
+                || suppressConflictingAction(mapping, client.options.keyJump, PUSH_RIGHT_SPACE)
+                || suppressConflictingAction(mapping, client.options.keySwapOffhand, DISMOUNT)
+                || suppressConflictingAction(mapping, client.options.keyUp, PUSH_RIGHT)
+                || suppressConflictingAction(mapping, client.options.keyUp, PUSH_RIGHT_SPACE)
+                || suppressConflictingAction(mapping, client.options.keyUp, FLICK_UP)
+                || suppressConflictingAction(mapping, client.options.keyDown, BRAKE)
+                || suppressConflictingAction(mapping, client.options.keyDown, FLICK_DOWN)
+                || suppressConflictingAction(mapping, client.options.keyLeft, STEER_LEFT)
+                || suppressConflictingAction(mapping, client.options.keyLeft, FLICK_LEFT)
+                || suppressConflictingAction(mapping, client.options.keyRight, STEER_RIGHT)
+                || suppressConflictingAction(mapping, client.options.keyRight, FLICK_RIGHT);
     }
 
     private static boolean suppressConflictingAction(KeyMapping mapping, KeyMapping vanilla, KeyMapping skate) {
@@ -308,7 +324,7 @@ public final class PexSkateClient implements ClientModInitializer {
 
         Gamepad pad = readGamepad();
         int flags = 0;
-        if (PUSH_RIGHT.isDown() || client.options.keyJump.isDown() || pad.pushRight()) flags |= 1;
+        if (PUSH_RIGHT.isDown() || PUSH_RIGHT_SPACE.isDown() || pad.pushRight()) flags |= 1;
         if (PUSH_LEFT.isDown() || pad.pushLeft()) flags |= 2;
         if (BRAKE.isDown() || pad.brake()) flags |= 4;
         if (DISMOUNT.isDown() || pad.dismount()) flags |= 0x80;

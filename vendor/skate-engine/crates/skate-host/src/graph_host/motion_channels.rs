@@ -36,6 +36,9 @@ impl MotionChannels {
             .iter()
             .any(|c| intent_key(&c.name) == intent_key(name))
     }
+    pub fn has_any(&self, names: &[&str]) -> bool {
+        names.iter().any(|name| self.has(name))
+    }
     ///82D1D5F8: missing channel returns zero; clamp remaining child time.
     pub fn remaining(&self, name: &str) -> f32 {
         self.channels
@@ -210,6 +213,51 @@ impl MotionChannels {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn insert_channel(channels: &mut MotionChannels, name: &str) {
+        let tree = PlaybackTree::Clip {
+            name: name.to_owned(),
+            clip: skate_core::animation::playback_clip::PlaybackClip::new(
+                2.0,
+                60.0,
+                1.0,
+                0,
+                Vec::new(),
+            ),
+        };
+        channels.insert(
+            name.to_owned(),
+            tree,
+            ChannelSettings {
+                priority: 0,
+                keep_alive: true,
+                mirrored: false,
+                speed: 1.0,
+                blend_in: 0.1,
+                hold_during_blend_in: false,
+                blend_out: 0.1,
+                hold_during_blend_out: false,
+                use_attributes: false,
+            },
+        );
+    }
+
+    #[test]
+    fn arm_gesture_predicate_only_matches_the_authored_gesture_channels() {
+        let mut channels = MotionChannels::default();
+        let arm_channels = &super::super::motion_character_gesture::CHANNELS;
+
+        assert!(!channels.has_any(arm_channels));
+        insert_channel(&mut channels, "fakie");
+        assert!(!channels.has_any(arm_channels));
+        insert_channel(&mut channels, "GestureRight");
+        assert!(channels.has_any(arm_channels));
     }
 }
 

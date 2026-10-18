@@ -8,6 +8,7 @@ use engine::{SkatePose, SkateSession};
 use physics::{Controls, decode_sequenced};
 use pumpkin_plugin_api::{
     Context, Plugin, PluginMetadata, Server,
+    common::BlockPos,
     command::Command,
     commands::CommandHandler,
     events::{
@@ -21,15 +22,19 @@ use pumpkin_plugin_api::{
     permissions,
     permission::{Permission, PermissionDefault},
     text::TextComponent,
+    world::{BlockFlags, World},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 static SKATE_STATE: OnceLock<Mutex<ServerState>> = OnceLock::new();
 static DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
+static SMOKE_DIAGNOSTICS: OnceLock<bool> = OnceLock::new();
+static SMOKE_PLATFORM_PREPARED: AtomicBool = AtomicBool::new(false);
 const INPUT_TIMEOUT: Duration = Duration::from_millis(250);
 const STATE_BROADCAST_INTERVAL: Duration = Duration::from_millis(50);
 const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
@@ -43,6 +48,8 @@ const PLAYER_IMPACT_COOLDOWN: Duration = Duration::from_millis(1_250);
 // teleport when server-side position has drifted far enough to indicate a
 // discontinuity such as an engine checkpoint respawn.
 const PLAYER_TELEPORT_CORRECTION_DISTANCE_SQUARED: f64 = 4.0;
+const DEFAULT_MAP_SESSION_PREWARM_COUNT: usize = 4;
+const MAX_MAP_SESSION_PREWARM_COUNT: usize = 4;
 
 fn server_state() -> &'static Mutex<ServerState> {
     SKATE_STATE.get_or_init(|| Mutex::new(ServerState::default()))
@@ -50,6 +57,14 @@ fn server_state() -> &'static Mutex<ServerState> {
 
 fn supports_client_protocol(data: &[u8]) -> bool {
     data == [CLIENT_PROTOCOL_VERSION]
+}
+
+fn smoke_diagnostics_enabled() -> bool {
+    *SMOKE_DIAGNOSTICS.get_or_init(|| {
+        DATA_ROOT
+            .get()
+            .is_some_and(|root| root.join("settings/smoke-diagnostics.txt").is_file())
+    })
 }
 
 fn sequence_is_newer(candidate: u32, previous: u32) -> bool {
@@ -81,6 +96,8 @@ struct ServerState {
     prop_sent_revisions: HashMap<String, (PropWorldKey, u64)>,
     pending_loads: HashSet<String>,
     pending_initial_scans: HashMap<String, PendingSkateLoad>,
+    prewarmed_world_session: Option<SkateSession>,
+    prewarmed_map_sessions: Option<(PathBuf, VecDeque<SkateSession>)>,
     engine_accumulator: HashMap<String, f32>,
     engine_updated_at: HashMap<String, Instant>,
     last_broadcast_at: HashMap<String, Instant>,
@@ -175,6 +192,63 @@ impl Plugin for PexSkate {
         DATA_ROOT
             .set(data_root)
             .map_err(|_| "Skate data folder was initialized more than once".to_owned())?;
+        if let Some(data_root) = DATA_ROOT.get() {
+            match default_skate_map_path(data_root) {
+                Ok(Some(map_path)) => {
+                    let map_prewarm_started = Instant::now();
+                    let desired_count = map_session_prewarm_count(data_root);
+                    let map_key = map_path.canonicalize().unwrap_or(map_path);
+                    let mut sessions = VecDeque::with_capacity(desired_count);
+                    for _ in 0..desired_count {
+                        match SkateSession::load_skate_map(data_root, &map_key) {
+                            Ok(session) => sessions.push_back(session),
+                            Err(error) => {
+                                eprintln!(
+                                    "PEX_SKATE_MAP_PREWARM_PARTIAL map={} ready={} requested={} fallback_to_lazy_load: {error}",
+                                    map_key.display(),
+                                    sessions.len(),
+                                    desired_count
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    if !sessions.is_empty() {
+                        let ready_count = sessions.len();
+                        if let Ok(mut state) = server_state().lock() {
+                            state.prewarmed_map_sessions = Some((map_key.clone(), sessions));
+                            eprintln!(
+                                "PEX_SKATE_MAP_PREWARM_READY map={} sessions={} requested={} duration_ms={}",
+                                map_key.display(),
+                                ready_count,
+                                desired_count,
+                                map_prewarm_started.elapsed().as_millis()
+                            );
+                        }
+                    }
+                }
+                Ok(None) => {
+                    let prewarm_started = Instant::now();
+                    match SkateSession::load(data_root, Vec::new(), Vec::new(), [0.0; 3], 0.0) {
+                        Ok(session) => {
+                            if let Ok(mut state) = server_state().lock() {
+                                state.prewarmed_world_session = Some(session);
+                                eprintln!(
+                                    "PEX_SKATE_PREWARM_READY duration_ms={}",
+                                    prewarm_started.elapsed().as_millis()
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("PEX_SKATE_PREWARM_FAILED fallback_to_lazy_load: {error}");
+                        }
+                    }
+                }
+                Err(error) => eprintln!(
+                    "PEX_SKATE_MAP_PREWARM_FAILED fallback_to_lazy_load: {error}"
+                ),
+            }
+        }
         context
             .register_permission(&Permission {
                 node: "pex-skate:use".into(),
@@ -239,6 +313,36 @@ impl Plugin for PexSkate {
     }
 }
 
+/// Creates a temporary collision runway only in the disposable server smoke fixture.
+/// The marker is written by smoke-test-pex-runtime.sh into that server's temp
+/// plugin data directory; it is never part of the published default config.
+fn prepare_smoke_test_platform(data_root: &Path, world: &World, position: (f64, f64, f64)) {
+    if !data_root.join("settings/smoke-platform.txt").is_file()
+        || SMOKE_PLATFORM_PREPARED.swap(true, Ordering::Relaxed)
+    {
+        return;
+    }
+    let flags = BlockFlags::NOTIFY_LISTENERS;
+    let mut placed = 0_usize;
+    let center_x = position.0.floor() as i32;
+    let center_y = position.1.floor() as i32 - 1;
+    let center_z = position.2.floor() as i32;
+    // The 129x9 runway gives four smoke players room to start 16 blocks apart
+    // and build speed in the test's straight-ahead input lane.
+    for dx in -64..=64 {
+        for dz in -4..=4 {
+            if world.set_block_by_name(
+                BlockPos { x: center_x + dx, y: center_y, z: center_z + dz },
+                "minecraft:stone",
+                flags,
+            ) {
+                placed += 1;
+            }
+        }
+    }
+    eprintln!("PEX_SKATE_SMOKE_PLATFORM_READY blocks={placed} y={center_y}");
+}
+
 struct ToggleSkate;
 
 impl CommandHandler for ToggleSkate {
@@ -297,6 +401,9 @@ impl CommandHandler for ToggleSkate {
                 ));
                 return Ok(0);
             };
+            let player_position = player.get_position();
+            let player_world = player.as_entity().get_world();
+            prepare_smoke_test_platform(data_root, &player_world, player_position);
             match default_skate_map_path(data_root) {
                 Ok(Some(map_path)) => {
                     let map_digests = match load_map_digests(data_root, &map_path) {
@@ -310,15 +417,38 @@ impl CommandHandler for ToggleSkate {
                             return Ok(0);
                         }
                     };
-                    let session = match SkateSession::load_skate_map(data_root, &map_path) {
-                        Ok(session) => session,
-                        Err(error) => {
-                            clear_pending_load(&name);
-                            sender.send_message(TextComponent::text(&format!(
-                                "Could not load Skate map {}: {error}",
-                                map_path.file_name().unwrap_or_default().to_string_lossy()
-                            )));
-                            return Ok(0);
+                    let map_key = map_path.canonicalize().unwrap_or_else(|_| map_path.clone());
+                    let prewarmed_session = server_state().lock().ok().and_then(|mut state| {
+                        let pool = state
+                            .prewarmed_map_sessions
+                            .as_mut()
+                            .filter(|(prewarmed_path, _)| *prewarmed_path == map_key)?;
+                        let session = pool.1.pop_front();
+                        let remaining = pool.1.len();
+                        if session.is_some() {
+                            eprintln!(
+                                "PEX_SKATE_MAP_PREWARM_USE map={} remaining={remaining}",
+                                map_key.display()
+                            );
+                        }
+                        if remaining == 0 {
+                            state.prewarmed_map_sessions = None;
+                        }
+                        session
+                    });
+                    let session = if let Some(session) = prewarmed_session {
+                        session
+                    } else {
+                        match SkateSession::load_skate_map(data_root, &map_path) {
+                            Ok(session) => session,
+                            Err(error) => {
+                                clear_pending_load(&name);
+                                sender.send_message(TextComponent::text(&format!(
+                                    "Could not load Skate map {}: {error}",
+                                    map_path.file_name().unwrap_or_default().to_string_lossy()
+                                )));
+                                return Ok(0);
+                            }
                         }
                     };
                     let mut session = session;
@@ -597,6 +727,36 @@ fn default_skate_map_path(data_root: &Path) -> Result<Option<PathBuf>, String> {
     Err(format!("{} is not installed in maps/", selection))
 }
 
+/// Number of retail-map engine sessions prepared during plugin startup. Each
+/// session owns a mutable physics world, so keep the pool bounded and let
+/// operators trade startup time and memory for hitch-free joins.
+fn map_session_prewarm_count(data_root: &Path) -> usize {
+    let path = data_root.join("settings").join("map-session-prewarm.txt");
+    let value = match std::fs::read_to_string(&path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return DEFAULT_MAP_SESSION_PREWARM_COUNT;
+        }
+        Err(error) => {
+            eprintln!(
+                "PEX_SKATE_MAP_PREWARM_SETTING_INVALID path={} fallback={DEFAULT_MAP_SESSION_PREWARM_COUNT}: {error}",
+                path.display()
+            );
+            return DEFAULT_MAP_SESSION_PREWARM_COUNT;
+        }
+    };
+    match value.trim().parse::<usize>() {
+        Ok(count) if count <= MAX_MAP_SESSION_PREWARM_COUNT => count,
+        _ => {
+            eprintln!(
+                "PEX_SKATE_MAP_PREWARM_SETTING_INVALID path={} expected=0..={MAX_MAP_SESSION_PREWARM_COUNT} fallback={DEFAULT_MAP_SESSION_PREWARM_COUNT}",
+                path.display()
+            );
+            DEFAULT_MAP_SESSION_PREWARM_COUNT
+        }
+    }
+}
+
 struct SkateInput;
 
 impl EventHandler<PlayerCustomPayloadEvent> for SkateInput {
@@ -651,6 +811,9 @@ impl EventHandler<PlayerCustomPayloadEvent> for SkateInput {
             };
             state.controls.insert(name.clone(), controls);
             state.control_updated_at.insert(name.clone(), now);
+            if smoke_diagnostics_enabled() && (sequence == 1 || sequence % 20 == 0) {
+                eprintln!("PEX_SKATE_SMOKE_CONTROL player={name} sequence={sequence}");
+            }
             if shove_pressed_edge(controls, previous, previous_is_fresh) {
                 state
                     .sessions
@@ -1117,13 +1280,23 @@ fn tick_pending_skate_load(server: &Server, name: &str, global_budget: &mut usiz
         spawn_position.2 as f32,
     ];
     pending.heading = player.get_yaw().to_radians();
-    let session = match SkateSession::load(
-        data_root,
-        local.triangles,
-        local.rails,
-        pending.spawn,
-        pending.heading,
-    ) {
+    let prewarmed_session = server_state()
+        .lock()
+        .ok()
+        .and_then(|mut state| state.prewarmed_world_session.take());
+    let loaded_session = match prewarmed_session {
+        Some(mut session) => session
+            .refresh_collision(local.triangles, local.rails)
+            .and_then(|()| session.activate_at(pending.spawn, pending.heading).map(|()| session)),
+        None => SkateSession::load(
+            data_root,
+            local.triangles,
+            local.rails,
+            pending.spawn,
+            pending.heading,
+        ),
+    };
+    let session = match loaded_session {
         Ok(session) => session,
         Err(error) => {
             clear_pending_load(name);
@@ -1296,7 +1469,7 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                     break;
                 }
                 match session.tick(controls) {
-                    Ok(next_pose) => pose = next_pose,
+                    Ok(()) => {}
                     Err(error) => {
                         failure = Some(error);
                         break;
@@ -1304,6 +1477,12 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 }
                 remaining -= period;
                 steps += 1;
+            }
+            if steps > 0 {
+                // A complete pose clones skeletal presentation data and is only
+                // needed once after the fixed-step batch for collision and net
+                // state. Do not rebuild it at 60 Hz for each physics substep.
+                pose = session.pose();
             }
             let previous_pose = previous_pose.unwrap_or_else(|| pose.clone());
             if steps == 6 {
@@ -1342,7 +1521,24 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                     );
                 }
             }
+            let previous_acknowledged = state
+                .acknowledged_control_sequences
+                .get(name)
+                .copied()
+                .unwrap_or(0);
             let acknowledged_sequence = state.acknowledge_control_step(name, steps, now);
+            if smoke_diagnostics_enabled()
+                && (acknowledged_sequence != previous_acknowledged || steps == 0)
+            {
+                eprintln!(
+                    "PEX_SKATE_SMOKE_TICK player={name} steps={steps} period={period:.4} remaining={remaining:.4} fresh={} failure={} acknowledged={acknowledged_sequence} received={} root={:?} velocity={:?}",
+                    state.controls_are_fresh(name, now),
+                    failure.is_some(),
+                    state.control_sequences.get(name).copied().unwrap_or(0),
+                    pose.root,
+                    pose.velocity,
+                );
+            }
             for (other_name, other_pose, _) in &nearby_players {
                 let previous_other_pose =
                     previous_nearby_poses.get(other_name).unwrap_or(other_pose);
@@ -1507,8 +1703,7 @@ fn advance_collision_scan(
     let center = scan.center();
     let local = scan
         .into_local()
-        .filter(|local| !local.triangles.is_empty())
-        .ok_or_else(|| "Minecraft returned no collision at the new skate location".to_owned())?;
+        .ok_or_else(|| "Minecraft collision scan did not finish".to_owned())?;
     let mut state = server_state()
         .lock()
         .map_err(|_| "Skate mode state is unavailable".to_owned())?;
@@ -2064,6 +2259,37 @@ mod integration_tests {
         assert!(super::default_skate_map_path(&root).is_err());
         std::fs::write(root.join("settings/default-map.txt"), "missing.skate\n").unwrap();
         assert!(super::default_skate_map_path(&root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retail_map_session_prewarm_setting_is_bounded_and_optional() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("pex-skate-prewarm-setting-{nonce}"));
+        std::fs::create_dir_all(root.join("settings")).unwrap();
+
+        assert_eq!(
+            super::map_session_prewarm_count(&root),
+            super::DEFAULT_MAP_SESSION_PREWARM_COUNT
+        );
+        let setting = root.join("settings/map-session-prewarm.txt");
+        std::fs::write(&setting, "2\n").unwrap();
+        assert_eq!(super::map_session_prewarm_count(&root), 2);
+        std::fs::write(&setting, "0\n").unwrap();
+        assert_eq!(super::map_session_prewarm_count(&root), 0);
+        std::fs::write(&setting, "5\n").unwrap();
+        assert_eq!(
+            super::map_session_prewarm_count(&root),
+            super::DEFAULT_MAP_SESSION_PREWARM_COUNT
+        );
+        std::fs::write(&setting, "many\n").unwrap();
+        assert_eq!(
+            super::map_session_prewarm_count(&root),
+            super::DEFAULT_MAP_SESSION_PREWARM_COUNT
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

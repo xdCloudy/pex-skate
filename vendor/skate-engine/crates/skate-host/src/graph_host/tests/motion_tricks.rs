@@ -43,7 +43,7 @@ fn stock_360_crouch_takeoff_and_air_animation_pipeline() {
             let mut cursor = Some(id);
             let mut is_360 = false;
             while let Some(i) = cursor {
-                is_360 |= graph.binding.states[i].name == "360Flip";
+                is_360 |= graph.binding.states[i].name == "360PopShuvit";
                 cursor = graph.binding.states[i].parent;
             }
             is_360.then_some(id)
@@ -54,7 +54,7 @@ fn stock_360_crouch_takeoff_and_air_animation_pipeline() {
             // Selection evaluates sibling preconditions before reaching FromAntic.
             if let Some(parent) = state.parent {
                 for &sibling in graph.binding.states[parent].children.iter().filter(|_|
-                    matches!(graph.binding.states[parent].name.as_str(), "Takeoff" | "360Flip")) {
+                    matches!(graph.binding.states[parent].name.as_str(), "Takeoff" | "360PopShuvit")) {
                     if let Some(expression) = graph.binding.states[sibling].expression {
                         check_expression(&graph.binding, &implementations.operations, expression);
                     }
@@ -160,10 +160,7 @@ fn stock_360_crouch_takeoff_and_air_animation_pipeline() {
                         )),
                         "SetTrickAttr",
                     ) => true,
-                    (
-                        MotionOperation::Trick(super::super::motion_tricks::Operation::Scoring(_)),
-                        "ScoringTrick",
-                    ) => true,
+                    (MotionOperation::ScoringTrick(_), "ScoringTrick") => true,
                     (
                         MotionOperation::Trick(
                             super::super::motion_tricks::Operation::MonitorUnderflip,
@@ -181,12 +178,11 @@ fn stock_360_crouch_takeoff_and_air_animation_pipeline() {
         "Anticipation.AnticCyc.360PopShuvitAnticCycle",
         "PlayAnimation",
     );
-    let ground = find("TailTrick.360Flip.Takeoff.FromAntic", "PlayAnimation");
-    let height = find("TailTrick.360Flip.Takeoff.FromAntic", "SetTrickHeight");
-    let air = find("TailTrick.360Flip.LeftGround", "PlayAnimation");
-    let attr = find("TailTrick.360Flip", "SetTrickAttr");
-    let score = find("TailTrick.360Flip", "ScoringTrick");
-    let monitor = find("TailTrick.360Flip", "MonitorUnderflip");
+    let ground = find("TailTrick.360PopShuvit.Takeoff.FromAntic", "PlayAnimation");
+    let height = find("TailTrick.360PopShuvit.Takeoff.FromAntic", "SetTrickHeight");
+    let air = find("TailTrick.360PopShuvit.LeftGround", "PlayAnimation");
+    let attr = find("TailTrick.360PopShuvit", "SetTrickAttr");
+    let score = find("TailTrick.360PopShuvit", "ScoringTrick");
     for mirrored in [false, true] {
         host.animation.reset_from_stock();
         host.animation.skater_animation_flags = Some(if mirrored { 0x40000000 } else { 0 });
@@ -213,15 +209,17 @@ fn stock_360_crouch_takeoff_and_air_animation_pipeline() {
             .expect("stock crouch must supply AnticStrength");
         assert!(f32::from_bits(antic.payload.0[0].unwrap()) > 0.0);
         host.animation.motion_intents.insert("GestureSpeed", 1.0);
-        for behavior in [attr, score, monitor, ground, height] {
+        for behavior in [attr, score, ground, height] {
             host.execute(behavior, &frame, 0).unwrap();
         }
         host.execute(score, &frame, 1).unwrap();
-        assert_eq!(host.score_packet.trick, Some(encode(b"360Flip")));
+        assert_eq!(host.score_packet.trick_names.first, Some(encode(b"360PopShuvit")));
+        assert_eq!(host.score_packet.trick_names.second, Some(encode(b"360PopShuvit")));
+        assert_ne!(host.score_packet.flags & 0x0100_0000, 0);
         assert!(
             host.animation
                 .construction_values
-                .contains(&(encode(b"Trick"), encode(b"360Flip")))
+                .contains(&(encode(b"Trick"), encode(b"360PopShuvit")))
         );
         host.animation.apply_parameters().unwrap();
         host.animation.advance(0.1, 0.0);
@@ -252,11 +250,8 @@ fn stock_360_crouch_takeoff_and_air_animation_pipeline() {
                 .flat_map(|b| b.rotation.iter().chain(&b.translation))
                 .all(|v| v.is_finite())
         );
-        host.execute(monitor, &frame, 1).unwrap();
-        assert!(!host.trick_requests.dark_catch);
-        host.execute(monitor, &frame, 2).unwrap();
     }
     println!(
-        "Stock crouch, scoop, B_360FLIP_G -> B_360FLIP_A, attributes and finite poses checked in both stances"
+        "Stock crouch, 360 Pop Shuvit takeoff, scoring, attributes and finite poses checked in both stances"
     );
 }

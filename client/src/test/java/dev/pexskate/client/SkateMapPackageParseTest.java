@@ -34,8 +34,10 @@ class SkateMapPackageParseTest {
             assertTrue(parsed.primitives().stream().anyMatch(primitive -> primitive.indices().length >= 3),
                     path.toString());
 
-            Path propsPath = path.getParent().getParent().resolve("assets/private/native-props")
-                    .resolve(path.getFileName());
+            Path dataRoot = path.getParent().getParent();
+            Path serverPropsPath = dataRoot.resolve("assets/private/native-props").resolve(path.getFileName());
+            Path clientPropsPath = dataRoot.resolve("props").resolve(path.getFileName());
+            Path propsPath = Files.isRegularFile(serverPropsPath) ? serverPropsPath : clientPropsPath;
             if (Files.isRegularFile(propsPath)) {
                 SkateMapModel.ParsedModel props = SkateMapModel.parse(
                         Files.readAllBytes(propsPath), path.getFileName() + "-props");
