@@ -349,14 +349,27 @@ pub(super) fn execute(
                                 .ok_or("LandOnBoard requires SkaterAnim orientation")? ^= 0x80000000;
                         }
                     }
-                    crate::graph_host::motion_stock_gameplay::Operation::AirDismounting
-                        if std::env::var("SK8_AIR_DISMOUNT").as_deref() != Ok("fail") =>
-                    {
-                        //gm_sk8 addition: the native producer isn't ported. Failing
-                        //here reset the skater whenever Y was pressed low in the air;
-                        //without it the authored graph still jumps off the board and
-                        //lands on foot (or bails from high up).
-                        let _ = phase;
+                    crate::graph_host::motion_stock_gameplay::Operation::AirDismounting => {
+                        let Instance::AirDismounting(state) = instance else {
+                            return Err("AirDismounting operation/instance mismatch".into());
+                        };
+                        if phase == 0 {
+                            state.begin(
+                                host.animation.current_length()?,
+                                host.animation.current_time()?,
+                            )?;
+                        } else if phase == 1 {
+                            if let Some(frames) = state.request(host.animation.tree_attributes()) {
+                                // TU3 ISkaterAnim v84/82B971C0: write the
+                                // captured frame count and OR request bit20.
+                                *host
+                                    .animation
+                                    .skater_animation_flags
+                                    .as_mut()
+                                    .ok_or("AirDismounting requires SkaterAnim flags")? |= 0x0010_0000;
+                                host.animation.air_dismount_revert_frames = Some(frames);
+                            }
+                        }
                     }
                     crate::graph_host::motion_stock_gameplay::Operation::UpdateStandingOnCar => {
                         // This node is a consumer of the moving-object
