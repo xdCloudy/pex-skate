@@ -9,6 +9,7 @@ import re
 import socket
 import struct
 import sys
+import threading
 import time
 import uuid
 import zlib
@@ -18,7 +19,7 @@ from pathlib import Path
 PROTOCOL_VERSION = 777
 SKATE_PROTOCOL_VERSION = 8
 MAX_PACKET_SIZE = 32 * 1024 * 1024
-GAMEPLAY_SMOKE_DURATION = 3.0
+GAMEPLAY_SMOKE_DURATION = 5.0
 
 # PEX 1.0.0's generated Minecraft 26.3 packet table.
 PLAY_CLIENTBOUND_DISCONNECT = 0x20
@@ -191,6 +192,10 @@ class MinecraftConnection:
         self.port = port
         self.stream: socket.socket | None = None
         self.compression_threshold: int | None = None
+        self.send_lock = threading.Lock()
+        self.input_stop = threading.Event()
+        self.input_thread: threading.Thread | None = None
+        self.input_last_sequence = 0
 
     def __enter__(self) -> MinecraftConnection:
         self.stream = socket.create_connection((self.host, self.port), timeout=5)
@@ -198,6 +203,9 @@ class MinecraftConnection:
         return self
 
     def __exit__(self, *_: object) -> None:
+        self.input_stop.set()
+        if self.input_thread is not None:
+            self.input_thread.join(timeout=1.0)
         if self.stream is not None:
             self.stream.close()
 
@@ -210,7 +218,58 @@ class MinecraftConnection:
                 payload = encode_varint(len(payload)) + zlib.compress(payload)
             else:
                 payload = b"\x00" + payload
-        self.stream.sendall(encode_varint(len(payload)) + payload)
+        with self.send_lock:
+            self.stream.sendall(encode_varint(len(payload)) + payload)
+
+    def start_gameplay_input_stream(
+        self,
+        exercise_duration: float,
+        ollie_points: list[tuple[float, float]] | None,
+        control_only: bool,
+    ) -> None:
+        if self.input_thread is not None:
+            return
+
+        def send_controls() -> None:
+            sequence = 0
+            next_tick = time.monotonic()
+            started_at = next_tick
+            while not self.input_stop.is_set():
+                sequence = (sequence + 1) & 0xFFFFFFFF
+                elapsed = time.monotonic() - started_at
+                if control_only:
+                    control = encode_control(sequence)
+                elif sequence <= 12:
+                    control = encode_control(sequence, push=True, forward=1.0)
+                elif sequence <= 18 and ollie_points:
+                    control = encode_control(
+                        sequence, right_x=ollie_points[0][0], right_y=-ollie_points[0][1]
+                    )
+                elif sequence <= 24 and ollie_points:
+                    control = encode_control(
+                        sequence, right_x=ollie_points[1][0], right_y=-ollie_points[1][1]
+                    )
+                elif elapsed < exercise_duration:
+                    control = encode_control(sequence, forward=0.4)
+                else:
+                    control = encode_control(sequence)
+                try:
+                    self.send(
+                        PLAY_SERVERBOUND_CUSTOM_PAYLOAD,
+                        encode_string("pexskate:control") + control,
+                    )
+                except OSError:
+                    return
+                self.input_last_sequence = sequence
+                if control_only:
+                    return
+                next_tick += 0.05
+                self.input_stop.wait(max(0.0, next_tick - time.monotonic()))
+
+        self.input_thread = threading.Thread(
+            target=send_controls, name="pex-skate-smoke-input", daemon=True
+        )
+        self.input_thread.start()
 
     def receive(self) -> tuple[int, bytes]:
         if self.stream is None:
@@ -323,11 +382,8 @@ def play_until_ack(
     skate_hello_acknowledged = False
     spawn_adjusted = spawn_offset == 0.0
     skate_active = False
-    next_sequence = 0
-    last_sent_sequence: int | None = None
     last_accounted_sequence: int | None = None
     consumed_control_count = 0
-    outstanding_sequences: set[int] = set()
     active_started_at: float | None = None
     first_state: SkateState | None = None
     last_state: SkateState | None = None
@@ -397,6 +453,9 @@ def play_until_ack(
                         print("PEX Skate state active=true; checking movement and stock right-stick trick input.")
                         active_started_at = time.monotonic()
                         first_state = state
+                        client.start_gameplay_input_stream(
+                            exercise_duration, ollie_points, control_only
+                        )
                     skate_active = True
                     last_state = state
                     horizontal_speed = (state.velocity[0] ** 2 + state.velocity[2] ** 2) ** 0.5
@@ -410,45 +469,15 @@ def play_until_ack(
                     required_control_count = (
                         1 if control_only else 24 if exercise_duration > 0 else 1
                     )
-                    if state.acknowledged_sequence in outstanding_sequences:
+                    sent_sequence = client.input_last_sequence
+                    if state.acknowledged_sequence and sent_sequence:
                         control_acknowledged = True
                         accounted_from = last_accounted_sequence or 0
                         acknowledged_count = (state.acknowledged_sequence - accounted_from) & 0xFFFFFFFF
-                        if acknowledged_count:
-                            consumed_control_count += min(acknowledged_count, len(outstanding_sequences))
+                        available_count = (sent_sequence - accounted_from) & 0xFFFFFFFF
+                        if acknowledged_count and acknowledged_count <= available_count:
+                            consumed_control_count += acknowledged_count
                             last_accounted_sequence = state.acknowledged_sequence
-                            outstanding_sequences = {
-                                sequence for sequence in outstanding_sequences
-                                if ((sequence - state.acknowledged_sequence) & 0xFFFFFFFF) > 0
-                            }
-                    if (len(outstanding_sequences) < 64
-                            and (elapsed < exercise_duration
-                                 or consumed_control_count < required_control_count)):
-                        next_sequence = (next_sequence + 1) & 0xFFFFFFFF
-                        if control_only:
-                            control = encode_control(next_sequence)
-                        elif consumed_control_count < 12:
-                            control = encode_control(next_sequence, push=True, forward=1.0)
-                        elif ollie_points and consumed_control_count < 18:
-                            control = encode_control(
-                                next_sequence, right_x=ollie_points[0][0], right_y=-ollie_points[0][1]
-                            )
-                        elif ollie_points and consumed_control_count < 24:
-                            control = encode_control(
-                                next_sequence, right_x=ollie_points[1][0], right_y=-ollie_points[1][1]
-                            )
-                        elif elapsed < exercise_duration:
-                            control = encode_control(next_sequence, forward=0.4)
-                        else:
-                            control = encode_control(next_sequence)
-                        client.send(
-                            PLAY_SERVERBOUND_CUSTOM_PAYLOAD,
-                            encode_string("pexskate:control") + control,
-                        )
-                        outstanding_sequences.add(next_sequence)
-                        if len(outstanding_sequences) > 256:
-                            outstanding_sequences.pop()
-                        last_sent_sequence = next_sequence
                     if (control_only
                             and elapsed >= exercise_duration
                             and consumed_control_count >= required_control_count

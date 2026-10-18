@@ -1532,10 +1532,12 @@ fn tick_skater(server: &Server, name: &str, global_collision_budget: &mut usize)
                 && (acknowledged_sequence != previous_acknowledged || steps == 0)
             {
                 eprintln!(
-                    "PEX_SKATE_SMOKE_TICK player={name} steps={steps} period={period:.4} remaining={remaining:.4} fresh={} failure={} acknowledged={acknowledged_sequence} received={}",
+                    "PEX_SKATE_SMOKE_TICK player={name} steps={steps} period={period:.4} remaining={remaining:.4} fresh={} failure={} acknowledged={acknowledged_sequence} received={} root={:?} velocity={:?}",
                     state.controls_are_fresh(name, now),
                     failure.is_some(),
                     state.control_sequences.get(name).copied().unwrap_or(0),
+                    pose.root,
+                    pose.velocity,
                 );
             }
             for (other_name, other_pose, _) in &nearby_players {

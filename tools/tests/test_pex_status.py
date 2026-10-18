@@ -147,12 +147,24 @@ class MinecraftClientProtocolTests(unittest.TestCase):
 
             def __init__(self) -> None:
                 self.sent: list[tuple[int, bytes]] = []
+                self.input_last_sequence = 0
 
             def receive(self) -> tuple[int, bytes]:
                 return packets.pop(0)
 
             def send(self, packet_id: int, body: bytes = b"") -> None:
                 self.sent.append((packet_id, body))
+
+            def start_gameplay_input_stream(
+                self, exercise_duration: float, ollie_points: list[tuple[float, float]] | None,
+                control_only: bool,
+            ) -> None:
+                control = test_pex_payload_client.encode_push_control(1)
+                self.send(
+                    test_pex_payload_client.PLAY_SERVERBOUND_CUSTOM_PAYLOAD,
+                    test_pex_payload_client.encode_string("pexskate:control") + control,
+                )
+                self.input_last_sequence = 1
 
         client = FakeConnection()
         output = io.StringIO()

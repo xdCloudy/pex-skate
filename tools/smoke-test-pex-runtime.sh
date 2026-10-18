@@ -161,7 +161,7 @@ run_smoke_players() {
     local -a player_args=(--username "PexSkateSmoke${player_index}")
     if [[ "$exercise_skate" == true ]]; then
       player_args+=(--exercise-skate --exercise-timeout "$exercise_timeout"
-        --exercise-duration "${PEX_SKATE_SMOKE_GAMEPLAY_DURATION:-3}"
+        --exercise-duration "${PEX_SKATE_SMOKE_GAMEPLAY_DURATION:-5}"
         --asset-root "$data_root/private")
       if (( player_spacing > 0 )); then
         player_spawn_offset=$(((player_index - 1) * player_spacing))
