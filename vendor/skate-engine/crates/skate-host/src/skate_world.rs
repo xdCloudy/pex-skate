@@ -15,10 +15,6 @@ use skate_core::{
 use skate_data::skate_map::SkateMap;
 use std::collections::HashMap;
 
-#[cfg(test)]
-#[path = "retail_shadow_geometry.rs"]
-pub(crate) mod shadow_geometry;
-
 pub(crate) fn validate_runtime(map: &SkateMap) -> Result<(), String> {
     let _span = info_span!("validate_map").entered();
     let archive = retail_archive(map)?;

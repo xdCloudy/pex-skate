@@ -25,8 +25,6 @@ pub(super) fn advance(
 ) -> Result<(), String> {
     let tick = physics.ticks;
     super::offboard_audit_trace::stage(tick, "begin", physics, skater, controls);
-    #[cfg(test)]
-    super::offboard_root_trace::trace(tick, "begin", skater);
     physics.exchange = super::SimulationExchange::new(tick);
     //SimController8285C968 dispatches the preceding tick's camera messages
     //before simulation. Keep End/Begin ordering when both occur in one update.
@@ -62,8 +60,6 @@ pub(super) fn advance(
     ))
     .map_err(|e| format!("Animation tick{}: {e}", physics.ticks))?;
     super::offboard_audit_trace::stage(tick, "animation", physics, skater, controls);
-    #[cfg(test)]
-    super::offboard_root_trace::trace(tick, "animation", skater);
     //ForcePhysics Begin82BB2868 writes the live Skeleton16420 mode once.
     //Consume the graph request so a later physical reset can retain its own0.
     if let Some(mode) = skater.animation.motion.riding.force_mode.take() {
@@ -86,8 +82,6 @@ pub(super) fn advance(
     let mut vehicle_ejected = false;
     if teleported {
         skater.respawn.reset_measurements();
-        #[cfg(test)]
-        super::offboard_root_trace::trace(tick, "teleport", skater);
         //82DB93B0..CC: complete pending queries and clear contact history.
         skater.offboard_contact.reset_history();
         skater.player_state.reset_for_teleport();
@@ -127,8 +121,6 @@ pub(super) fn advance(
     }
     let state_after_selection = skater.player_state.current();
     super::offboard_audit_trace::stage(tick, "selected", physics, skater, controls);
-    #[cfg(test)]
-    super::offboard_root_trace::trace(tick, "selected", skater);
     if state_before_selection != state_after_selection {
         if skater.player_input.processed.flags_2476 & (1 << 22) != 0
             || state_before_selection == skate_core::player::state::PhysicalStateId::HandPlant
@@ -232,8 +224,6 @@ pub(super) fn advance(
     // BoardRuntime applies that same queue during its shared solve.
     skater.player_input.player.state_timer_1344 += skater.player_input.processed.timestep_2604;
     super::offboard_audit_trace::stage(tick, "state", physics, skater, controls);
-    #[cfg(test)]
-    super::offboard_root_trace::trace(tick, "state", skater);
     //82DB6150: update the real possession owner after state movement, before solve.
     super::offboard::board_manager::runtime::update(physics, skater);
     super::offboard_audit_trace::stage(tick, "possession", physics, skater, controls);
@@ -243,15 +233,11 @@ pub(super) fn advance(
     skeleton_queries.publish(&mut skater.player_input.player);
     bevy::log::info_span!("fixed_collision_and_solve").in_scope(|| solve::advance(physics, skater, skater.ground.steering.targets))?;
     super::offboard_audit_trace::stage(tick, "solve", physics, skater, controls);
-    #[cfg(test)]
-    super::offboard_root_trace::trace(tick, "solve", skater);
     //ProcessOutput82DB6EE8 resets the packet before its component publishers.
     //All consumers of the preceding output have completed this frame's input.
     super::player_input::reset_outputs(&mut skater.player_input.physical);
     bevy::log::info_span!("fixed_finish_skater").in_scope(|| physics.finish_skater(skater))?;
     super::offboard_audit_trace::stage(tick, "finish", physics, skater, controls);
-    #[cfg(test)]
-    super::offboard_root_trace::trace(tick, "finish", skater);
     let simulation = physics.settings.step.simulation;
     skater
         .player_input

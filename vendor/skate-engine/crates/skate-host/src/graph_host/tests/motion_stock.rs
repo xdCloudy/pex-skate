@@ -102,9 +102,15 @@ fn stock_motion_factory_support_inventory() {
         .instantiate_operations(&source, &mut MotionFactory)
         .unwrap();
     let mut rows = String::from(
-        "kind\tname\tfactory_status\toperation_id\truntime_id\tenabled\towner\tvariant\n",
+        "kind\tname\tfactory_status\toperation_id\truntime_id\tenabled\towner\tvariant\tattributes\n",
     );
     let mut counts = [0usize; 3];
+    let mut element_parents = vec![None; source.elements.len()];
+    for (parent, element) in source.elements.iter().enumerate() {
+        for &child in &element.children {
+            element_parents[child] = Some(parent);
+        }
+    }
     for (id, (operation, implementation)) in binding
         .operations
         .iter()
@@ -121,26 +127,39 @@ fn stock_motion_factory_support_inventory() {
         } else {
             "Registered"
         };
-        let owner = if let Node::State(state) = operation.parent {
+        let owner = {
             let mut names = Vec::new();
-            let mut cursor = Some(state);
-            while let Some(state) = cursor {
-                names.push(binding.states[state].name.clone());
-                cursor = binding.states[state].parent;
+            let mut cursor = Some(operation.element);
+            while let Some(element) = cursor {
+                if let Some(state) = binding.states.iter().find(|state| state.element == element) {
+                    names.push(state.name.clone());
+                }
+                cursor = element_parents[element];
             }
             names.reverse();
-            names.join(".")
-        } else {
-            format!("{:?}", operation.parent)
+            if names.is_empty() { format!("{:?}", operation.parent) } else { names.join(".") }
         };
         let clean = |s: String| s.replace(['\t', '\r', '\n'], " ");
+        let attributes = source.elements[operation.element]
+            .attributes
+            .iter()
+            .map(|attribute| format!(
+                "{}={:?}/{:08x}/{}",
+                attribute.name,
+                attribute.text,
+                attribute.float_bits,
+                attribute.boolean_byte,
+            ))
+            .collect::<Vec<_>>()
+            .join(";");
         rows.push_str(&format!(
-            "{kind}\t{}\t{status}\t{id}\t{}\t{}\t{}\t{}\n",
+            "{kind}\t{}\t{status}\t{id}\t{}\t{}\t{}\t{}\t{}\n",
             clean(operation.name.clone()),
             counts[index],
             operation.enabled,
             clean(owner),
-            clean(format!("{implementation:?}"))
+            clean(format!("{implementation:?}")),
+            clean(attributes),
         ));
         counts[index] += 1;
     }
