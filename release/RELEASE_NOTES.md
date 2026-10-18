@@ -1,5 +1,10 @@
 Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by SkateGM's portable Rust simulation. This release includes a portable server/client bundle and a Windows helper that converts a Skate 3 Xbox 360 ISO supplied by the user. No game data is included.
 
+### 0.1.0-alpha.82
+
+- Correct the retail skater GLB exporter to build the four duplicate toe and hand joints from their matching source bones, instead of reusing left finger-joint transforms that tore the rendered mesh.
+- Add a regression test for the toe/hand source-bone mapping.
+
 ### 0.1.0-alpha.81
 
 - Add half of the 20 Hz server snapshot interval to local RTT prediction so the chase camera and skater compensate for snapshot age even on low-latency connections.

@@ -5,6 +5,19 @@ from PIL import Image
 import numpy as np
 from tools.asset_pipeline.retail_character import ABIN,RX2,AnimSource,SkeletonSet,quat_matrix,decode_dense_morphs,morph_weight
 
+REPARENTED_BONES={
+    32:('RIGHTTOEBASE_REPARENTED',20),
+    33:('LEFTTOEBASE_REPARENTED',24),
+    34:('RIGHTHAND_REPARENTED',12),
+    35:('LEFTHAND_REPARENTED',16),
+}
+
+def add_reparented_bones(worlds,names,reference):
+    """Replace unused finger channels with duplicate toe/hand joints for rendering."""
+    for index,(name,source_index) in REPARENTED_BONES.items():
+        worlds[index]=reference[source_index]
+        names[index]=name
+
 class Glb:
     def __init__(self):
         self.data=bytearray()
@@ -49,8 +62,7 @@ def convert(models,private,recipe,*,stock=None,output=None,materials=None,live_m
         local=quat_matrix(sqt.quat,sqt.scale) if sqt else np.eye(4)
         if sqt:local[3,:3]=sqt.trans
         reference[index]=local@reference[parent] if parent>=0 else local
-    for index,name in {32:'RIGHTTOEBASE_REPARENTED',33:'LEFTTOEBASE_REPARENTED',34:'LEFTHAND_REPARENTED',35:'RIGHTHAND_REPARENTED'}.items():
-        worlds[index]=reference[index];names[index]=name
+    add_reparented_bones(worlds,names,reference)
     # Retain the established mesh bone-local basis consumed by render_basis()
     # in the game. This algebraic change needs no editor or animation bake.
     basis_transpose=np.array([[1.,0,0,0],[0,0,-1.,0],[0,1.,0,0],[0,0,0,1.]])
