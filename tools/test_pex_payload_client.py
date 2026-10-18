@@ -81,6 +81,13 @@ class SkateState:
     acknowledged_sequence: int
 
 
+def decode_login_entity_id(data: bytes) -> int:
+    """Read the local entity ID at the start of the play login packet."""
+    if len(data) < 4:
+        raise ValueError("Minecraft login packet is missing its entity ID")
+    return struct.unpack_from(">i", data)[0]
+
+
 def decode_skate_state(data: bytes) -> SkateState:
     """Decode gameplay state needed by the live PEX smoke check."""
     if len(data) < 81 or data[0] != 11:
@@ -311,6 +318,7 @@ def play_until_ack(
     spawn_offset: float = 0.0,
 ) -> None:
     saw_login = False
+    local_entity_id: int | None = None
     skate_command_sent = False
     skate_hello_acknowledged = False
     spawn_adjusted = spawn_offset == 0.0
@@ -354,6 +362,7 @@ def play_until_ack(
                 print(f"Minecraft system chat: {chat_text[:240]}")
         if packet_id == PLAY_CLIENTBOUND_LOGIN and not saw_login:
             saw_login = True
+            local_entity_id = decode_login_entity_id(body)
             client.send(PLAY_SERVERBOUND_PLAYER_LOADED)
             client.send(PLAY_SERVERBOUND_CUSTOM_PAYLOAD, encode_string("pexskate:hello") + bytes([SKATE_PROTOCOL_VERSION]))
             if not exercise_skate:
@@ -377,6 +386,11 @@ def play_until_ack(
                     print("Requested /skate; waiting for an active engine state and consumed control.")
             elif channel == "pexskate:state" and exercise_skate:
                 state = decode_skate_state(payload)
+                # PEX broadcasts skater state to all connected viewers. Only
+                # this client's entity has the control sequence this tester
+                # sent; remote snapshots may share the same sequence numbers.
+                if state.entity_id != local_entity_id:
+                    continue
                 state_count += 1
                 if state.active:
                     if not skate_active:
@@ -452,9 +466,9 @@ def play_until_ack(
                             raise RuntimeError("PEX Skate did not return a gameplay state")
                         horizontal_distance = ((last_state.root[0] - first_state.root[0]) ** 2
                                                + (last_state.root[2] - first_state.root[2]) ** 2) ** 0.5
-                        if horizontal_distance < 0.1 and max_horizontal_speed < 0.2:
+                        if horizontal_distance < 1.0:
                             raise RuntimeError(
-                                "PEX consumed Skate controls but produced no measurable horizontal movement "
+                                "PEX consumed Skate controls but produced less than one block of net horizontal movement "
                                 f"(distance={horizontal_distance:.3f}, speed={max_horizontal_speed:.3f})"
                             )
                         if not saw_trick:

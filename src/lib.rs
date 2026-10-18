@@ -311,7 +311,7 @@ impl Plugin for PexSkate {
     }
 }
 
-/// Creates a small collision pad only in the disposable server smoke fixture.
+/// Creates a temporary collision runway only in the disposable server smoke fixture.
 /// The marker is written by smoke-test-pex-runtime.sh into that server's temp
 /// plugin data directory; it is never part of the published default config.
 fn prepare_smoke_test_platform(data_root: &Path, world: &World, position: (f64, f64, f64)) {
@@ -323,8 +323,11 @@ fn prepare_smoke_test_platform(data_root: &Path, world: &World, position: (f64, 
     let center_x = position.0.floor() as i32;
     let center_y = position.1.floor() as i32 - 1;
     let center_z = position.2.floor() as i32;
-    for dx in -8..=8 {
-        for dz in -8..=8 {
+    // A 49x49 pad gives the stock three-second ollie exercise room to build
+    // speed without falling off and respawning, including when several smoke
+    // players start eight blocks apart.
+    for dx in -24..=24 {
+        for dz in -24..=24 {
             if world.set_block_by_name(
                 BlockPos { x: center_x + dx, y: center_y, z: center_z + dz },
                 "minecraft:stone",

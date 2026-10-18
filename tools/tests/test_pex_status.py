@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 import socket
 import struct
 import threading
 import unittest
+from contextlib import redirect_stdout
 
 from tools import check_pex_status
 from tools import test_pex_payload_client
@@ -105,9 +107,10 @@ class MinecraftClientProtocolTests(unittest.TestCase):
 
     def test_gameplay_smoke_requests_skate_and_waits_for_control_ack(self) -> None:
         def state_packet(acknowledged_sequence: int, root_x: float = 0.0,
-                         velocity_x: float = 0.0, trick_name: str = "") -> bytes:
+                         velocity_x: float = 0.0, trick_name: str = "",
+                         entity_id: int = 42) -> bytes:
             state = bytearray((11, 1))
-            state.extend(struct.pack(">I", 42))
+            state.extend(struct.pack(">I", entity_id))
             state.extend(struct.pack(">18f", root_x, 0.0, 0.0,
                                      0.0, 0.0, 0.0,
                                      0.0, 0.0, 0.0, 1.0,
@@ -125,12 +128,16 @@ class MinecraftClientProtocolTests(unittest.TestCase):
             return test_pex_payload_client.encode_string("pexskate:state") + state
 
         packets = [
-            (test_pex_payload_client.PLAY_CLIENTBOUND_LOGIN, b""),
+            (test_pex_payload_client.PLAY_CLIENTBOUND_LOGIN, struct.pack(">i", 42)),
             (
                 test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD,
                 test_pex_payload_client.encode_string("pexskate:hello_ack") + bytes((8,)),
             ),
             (test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD, state_packet(0)),
+            # This remote snapshot reuses the local control sequence and has
+            # an obviously different position; it must not complete the test.
+            (test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD,
+             state_packet(1, 100.0, 100.0, "Remote", entity_id=17)),
             (test_pex_payload_client.PLAY_CLIENTBOUND_CUSTOM_PAYLOAD,
              state_packet(1, 1.0, 1.0, "Ollie")),
         ]
@@ -148,9 +155,13 @@ class MinecraftClientProtocolTests(unittest.TestCase):
                 self.sent.append((packet_id, body))
 
         client = FakeConnection()
-        test_pex_payload_client.play_until_ack(
-            client, exercise_skate=True, exercise_timeout=1, exercise_duration=0
-        )
+        output = io.StringIO()
+        with redirect_stdout(output):
+            test_pex_payload_client.play_until_ack(
+                client, exercise_skate=True, exercise_timeout=1, exercise_duration=0
+            )
+        self.assertIn("trick=Ollie", output.getvalue())
+        self.assertIn("states=2", output.getvalue())
 
         self.assertIn(
             (test_pex_payload_client.PLAY_SERVERBOUND_CHAT_COMMAND,
