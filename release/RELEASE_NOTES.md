@@ -1,5 +1,25 @@
 Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by SkateGM's portable Rust simulation. This release includes a portable server/client bundle and a Windows helper that converts a Skate 3 Xbox 360 ISO supplied by the user. No game data is included.
 
+### 0.1.0-alpha.80
+
+- Keep network-authoritative skaters in the render pass while the custom Skate camera is active, even when Minecraft's camera frustum rejects their entity bounds.
+- Preserve the existing finite-vector guard for Minecraft's frustum offset loop.
+
+### 0.1.0-alpha.79
+
+- Log the first Minecraft frustum direction and abort camera-cube offsetting when the vector is invalid or cannot advance along the method's Z axis.
+- Add regression coverage for non-finite and near-zero frustum direction vectors.
+
+### 0.1.0-alpha.78
+
+- Guard Minecraft's camera culling loop when it receives a non-finite view vector, which otherwise can hang the render thread while offsetting the frustum.
+- Retain finite-pose checks for custom chase-camera updates and expand camera regression coverage.
+
+### 0.1.0-alpha.77
+
+- Guard both Minecraft-world and retail-district camera updates against non-finite pose vectors and rotations before updating Minecraft's camera frustum.
+- Add camera math regression coverage for non-finite positions and rotations.
+
 ### 0.1.0-alpha.76
 
 - Fix fallback skateboard model baking on Minecraft 26.3 by using a single item atlas and explicit in-bounds face UVs.

@@ -53,12 +53,16 @@ public abstract class SkateCameraMixin {
             // anchoring to them makes the camera drift against the rendered
             // player even though both are sampled from the same pose.
             float[] root = pose.rootPosition();
+            float characterYaw = pose.characterYaw();
+            if (root.length < 3 || !Float.isFinite(root[0]) || !Float.isFinite(root[1])
+                    || !Float.isFinite(root[2]) || !Float.isFinite(characterYaw)) return;
             Vec3 anchor = new Vec3(root[0], root[1], root[2]);
             Vec3 lookAt = SkateCameraMath.minecraftChaseLookAt(anchor);
             // Board yaw can spin independently while the skater performs a
             // trick. Use the torso heading so the chase camera stays aligned
             // with the same character pose rendered this frame.
-            Vec3 target = SkateCameraMath.minecraftChasePosition(anchor, pose.characterYaw());
+            Vec3 target = SkateCameraMath.minecraftChasePosition(anchor, characterYaw);
+            if (!SkateCameraMath.isFinite(lookAt) || !SkateCameraMath.isFinite(target)) return;
 
             double segmentLength = lookAt.distanceTo(target);
             if (segmentLength > 1.0e-6) {
@@ -72,6 +76,7 @@ public abstract class SkateCameraMixin {
             }
 
             SkateCameraMath.Rotation rotation = SkateCameraMath.lookAt(target, lookAt);
+            if (!SkateCameraMath.isFinite(target) || !SkateCameraMath.isFinite(rotation)) return;
             this.setPosition(target);
             this.setRotation(rotation.yaw(), rotation.pitch());
             pexskate$syncRenderState(state, this.rotation(), rotation.yaw(), rotation.pitch());
@@ -82,7 +87,8 @@ public abstract class SkateCameraMixin {
 
         float[] camera = pose.cameraPosition();
         float[] forward = pose.cameraForward();
-        if (camera == null) return;
+        if (camera == null || camera.length < 3 || !finite3(camera)
+                || forward.length < 3 || !finite3(forward)) return;
         Vec3 target = new Vec3(camera[0], camera[1], camera[2]);
         float[] hipsPoint = pose.point(1);
         if (hipsPoint == null) return;
@@ -104,10 +110,11 @@ public abstract class SkateCameraMixin {
 
         float yaw = (float) Math.toDegrees(Math.atan2(-forward[0], forward[2]));
         float pitch = (float) -Math.toDegrees(Math.asin(Math.clamp(forward[1], -1.0f, 1.0f)));
-        this.setPosition(target);
-        this.setRotation(yaw, pitch);
+        if (!SkateCameraMath.isFinite(target) || !SkateCameraMath.isFinite(hips)
+                || !Float.isFinite(yaw) || !Float.isFinite(pitch)) return;
 
         float[] upValues = pose.cameraUp();
+        if (upValues.length < 3 || !finite3(upValues)) return;
         Vector3f cameraForward = new Vector3f(forward[0], forward[1], forward[2]).normalize();
         Vector3f up = new Vector3f(upValues[0], upValues[1], upValues[2]).normalize();
         Vector3f right = up.cross(cameraForward, new Vector3f()).normalize();
@@ -116,6 +123,11 @@ public abstract class SkateCameraMixin {
                 .setColumn(0, right)
                 .setColumn(1, up)
                 .setColumn(2, new Vector3f(cameraForward).negate()));
+        if (!finite(cameraForward) || !finite(up) || !Float.isFinite(orientation.w)
+                || !Float.isFinite(orientation.x) || !Float.isFinite(orientation.y)
+                || !Float.isFinite(orientation.z)) return;
+        this.setPosition(target);
+        this.setRotation(yaw, pitch);
         pexskate$syncRenderState(state, orientation, yaw, pitch);
 
         float fov = pose.cameraFov();
@@ -135,5 +147,13 @@ public abstract class SkateCameraMixin {
         state.viewRotationMatrix.identity().rotation(new Quaternionf(orientation).conjugate());
         pexskate$prepareCullFrustum(state.projectionMatrix, state.viewRotationMatrix, state.pos);
         state.cullFrustum.set(pexskate$getCullFrustum());
+    }
+
+    private static boolean finite3(float[] vector) {
+        return Float.isFinite(vector[0]) && Float.isFinite(vector[1]) && Float.isFinite(vector[2]);
+    }
+
+    private static boolean finite(Vector3f vector) {
+        return Float.isFinite(vector.x) && Float.isFinite(vector.y) && Float.isFinite(vector.z);
     }
 }

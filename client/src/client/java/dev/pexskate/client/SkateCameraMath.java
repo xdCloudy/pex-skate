@@ -15,6 +15,22 @@ public final class SkateCameraMath {
         return root.add(0.0, 0.75, 0.0);
     }
 
+    public static boolean isFinite(Vec3 vector) {
+        return Double.isFinite(vector.x) && Double.isFinite(vector.y) && Double.isFinite(vector.z);
+    }
+
+    public static boolean isFinite(Rotation rotation) {
+        return Float.isFinite(rotation.yaw()) && Float.isFinite(rotation.pitch());
+    }
+
+    public static boolean isFiniteViewVector(float x, float y, float z, float w) {
+        return Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z) && Float.isFinite(w);
+    }
+
+    public static boolean hasFrustumOffsetProgress(float x, float y, float z, float w) {
+        return isFiniteViewVector(x, y, z, w) && Math.abs(z) >= 0.05f;
+    }
+
     public static Rotation lookAt(Vec3 camera, Vec3 target) {
         Vec3 view = target.subtract(camera).normalize();
         float yaw = (float) Math.toDegrees(Math.atan2(-view.x, view.z));
