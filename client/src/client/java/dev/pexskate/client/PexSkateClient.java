@@ -277,7 +277,8 @@ public final class PexSkateClient implements ClientModInitializer {
         return suppressConflictingAction(mapping, client.options.keyDrop, GRAB_LEFT)
                 || suppressConflictingAction(mapping, client.options.keyInventory, GRAB_RIGHT)
                 || suppressConflictingAction(mapping, client.options.keyShift, PUSH_LEFT)
-                || suppressConflictingAction(mapping, client.options.keyJump, PUSH_RIGHT_SPACE);
+                || suppressConflictingAction(mapping, client.options.keyJump, PUSH_RIGHT_SPACE)
+                || suppressConflictingAction(mapping, client.options.keySwapOffhand, DISMOUNT);
     }
 
     private static boolean suppressConflictingAction(KeyMapping mapping, KeyMapping vanilla, KeyMapping skate) {
