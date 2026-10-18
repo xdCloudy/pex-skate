@@ -236,7 +236,11 @@ if [[ -n "$converted_data" ]]; then
       run_server_smoke "$map_name"
     done
   else
-    run_server_smoke "${PEX_SKATE_SMOKE_MAP:-}"
+    # A freshly generated Pumpkin test world may not have terrain at the
+    # player's spawn. Keep the default data-backed gameplay smoke deterministic
+    # by selecting Minecraft-world mode and placing the temporary test platform.
+    # Callers can still select a retail district with PEX_SKATE_SMOKE_MAP.
+    run_server_smoke "${PEX_SKATE_SMOKE_MAP:-minecraft}"
   fi
 else
   run_server_smoke
