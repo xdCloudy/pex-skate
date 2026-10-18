@@ -13,6 +13,7 @@ pub enum Condition {
     EnoughDistToObstacle { database: String, animation: String },
     CanBipedLand,
     IsCrouchedEnoughForBlendToGrabCycle,
+    IsArmChannelPlaying,
     TrucksOrDeckInContact,
     PhysicsWantsManualExit,
     ApexReached,
@@ -21,6 +22,7 @@ impl Condition {
     pub fn recognizes(name: &str) -> bool {
         matches!(name, "CanLandOnBoard" | "DistToEdge" | "IsDeckFree" |
             "IsBipedCommittedToMotion" | "EnoughDistToObstacle" | "CanBipedLand" |
+            "IsArmChannelPlaying" |
             "IsCrouchedEnoughForBlendToGrabCycle" | "TrucksOrDeckInContact" |
             "PhysicsWantsManualExit" | "ApexReached")
     }
@@ -35,6 +37,7 @@ impl Condition {
                 animation: a.text("anim").unwrap_or("").to_owned(),
             },
             "CanBipedLand" => Self::CanBipedLand,
+            "IsArmChannelPlaying" => Self::IsArmChannelPlaying,
             "IsCrouchedEnoughForBlendToGrabCycle" => Self::IsCrouchedEnoughForBlendToGrabCycle,
             "TrucksOrDeckInContact" => Self::TrucksOrDeckInContact,
             "PhysicsWantsManualExit" => Self::PhysicsWantsManualExit,
@@ -43,8 +46,17 @@ impl Condition {
         }
     }
     pub fn evaluate(&self, host: &MotionHost) -> Result<bool, String> {
+        if matches!(self, Self::IsArmChannelPlaying) {
+            // The authored IntoDropIn exit ends both hand gestures before it
+            // waits for this predicate. CharacterGesture owns these three
+            // arm overlay channels, which remain registered through fade-out.
+            return Ok(host.animation.channels.has_any(
+                &super::motion_character_gesture::CHANNELS,
+            ));
+        }
         let p = host.gameplay_conditions.as_ref().ok_or("stock gameplay condition requires physical publication")?;
         Ok(match self {
+            Self::IsArmChannelPlaying => unreachable!("handled before physical publication lookup"),
             Self::CanLandOnBoard => p.can_land_on_board,
             //82BA8180: no Air437/time-valid or moving-object gate.
             Self::CanBipedLand => p.offboard_landing_normal[1] > 0.85,
