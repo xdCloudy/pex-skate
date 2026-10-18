@@ -78,11 +78,39 @@ try {
     $checkArchive = [System.IO.Compression.ZipFile]::OpenRead($bundlePath)
     try {
         $actualEntries = @($checkArchive.Entries | ForEach-Object FullName | Sort-Object)
+        if (Compare-Object $expectedEntries $actualEntries) {
+            throw "Portable bundle is missing files or contains unexpected paths."
+        }
+        $checksumEntries = @{}
+        foreach ($line in Get-Content -LiteralPath (Join-Path $outputDir "SHA256SUMS")) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') {
+                throw "Invalid checksum manifest line: $line"
+            }
+            $checksumEntries[$Matches[2]] = $Matches[1]
+        }
+        foreach ($fileName in @("pex-skate.wasm", "pex-skate-client-26.3.jar")) {
+            $filePath = Join-Path $outputDir $fileName
+            $fileHash = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($checksumEntries[$fileName] -ne $fileHash) {
+                throw "Checksum manifest does not match dist/$fileName."
+            }
+            $entry = $checkArchive.GetEntry($fileName)
+            if (-not $entry) { throw "Portable bundle is missing $fileName." }
+            $entryStream = $entry.Open()
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            try {
+                $entryHashBytes = $sha256.ComputeHash($entryStream)
+                $entryHash = [System.BitConverter]::ToString($entryHashBytes).Replace("-", "").ToLowerInvariant()
+            } finally {
+                $sha256.Dispose()
+                $entryStream.Dispose()
+            }
+            if ($entryHash -ne $fileHash) {
+                throw "Portable bundle $fileName does not match dist/$fileName."
+            }
+        }
     } finally {
         $checkArchive.Dispose()
-    }
-    if (Compare-Object $expectedEntries $actualEntries) {
-        throw "Portable bundle is missing files or contains unexpected paths."
     }
 } finally {
     Pop-Location
