@@ -278,7 +278,16 @@ public final class PexSkateClient implements ClientModInitializer {
                 || suppressConflictingAction(mapping, client.options.keyInventory, GRAB_RIGHT)
                 || suppressConflictingAction(mapping, client.options.keyShift, PUSH_LEFT)
                 || suppressConflictingAction(mapping, client.options.keyJump, PUSH_RIGHT_SPACE)
-                || suppressConflictingAction(mapping, client.options.keySwapOffhand, DISMOUNT);
+                || suppressConflictingAction(mapping, client.options.keySwapOffhand, DISMOUNT)
+                || suppressConflictingAction(mapping, client.options.keyUp, PUSH_RIGHT)
+                || suppressConflictingAction(mapping, client.options.keyUp, PUSH_RIGHT_SPACE)
+                || suppressConflictingAction(mapping, client.options.keyUp, FLICK_UP)
+                || suppressConflictingAction(mapping, client.options.keyDown, BRAKE)
+                || suppressConflictingAction(mapping, client.options.keyDown, FLICK_DOWN)
+                || suppressConflictingAction(mapping, client.options.keyLeft, STEER_LEFT)
+                || suppressConflictingAction(mapping, client.options.keyLeft, FLICK_LEFT)
+                || suppressConflictingAction(mapping, client.options.keyRight, STEER_RIGHT)
+                || suppressConflictingAction(mapping, client.options.keyRight, FLICK_RIGHT);
     }
 
     private static boolean suppressConflictingAction(KeyMapping mapping, KeyMapping vanilla, KeyMapping skate) {
