@@ -4,8 +4,8 @@ set -euo pipefail
 plugin=${1:?usage: smoke-test-pex-runtime.sh <pex-skate.wasm> [converted-data-folder]}
 converted_data=${2:-}
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-server_version=v1.0.0
-server_sha256=198ec31b4fb96ac51970ca5366691da2b44add2954ab55ee0bda446423ed50ba
+server_version=v1.1.0
+server_sha256=fa23f93ed9be9bfff23f7be2d0699d27f880f2ee3d96ea47864d81f07b3592d6
 server_name=pumpkin-X64-Linux
 server_url="https://github.com/Conman1533/PEX/releases/download/${server_version}/${server_name}"
 spawn_protection=${PEX_SKATE_SMOKE_SPAWN_PROTECTION:-16}

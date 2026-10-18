@@ -21,7 +21,7 @@ SKATE_PROTOCOL_VERSION = 8
 MAX_PACKET_SIZE = 32 * 1024 * 1024
 GAMEPLAY_SMOKE_DURATION = 5.0
 
-# PEX 1.0.0's generated Minecraft 26.3 packet table.
+# PEX 1.1.0's generated Minecraft 26.3 packet table.
 PLAY_CLIENTBOUND_DISCONNECT = 0x20
 PLAY_CLIENTBOUND_CUSTOM_PAYLOAD = 0x18
 PLAY_CLIENTBOUND_KEEP_ALIVE = 0x2D
@@ -357,7 +357,7 @@ def config_step(client: MinecraftConnection) -> None:
             key_length, offset = decode_varint(body)
             key = body[offset:offset + key_length]
             client.send(0x01, encode_string(key.decode("utf-8")) + b"\x00")
-        elif packet_id == 0x0F:  # PEX 1.0.0 select-known-packs; request full registries.
+        elif packet_id == 0x0F:  # PEX 1.1.0 select-known-packs; request full registries.
             client.send(0x07, b"\x00")
         elif packet_id == 0x13:  # Code of conduct; accept it for this disposable local test.
             client.send(0x09)

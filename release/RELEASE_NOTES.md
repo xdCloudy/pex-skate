@@ -130,7 +130,7 @@ Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by 
 - Gamepad axes and buttons are refreshed through SDL's supported manual update path inside Minecraft's client tick.
 - SHA-256 manifests for the downloadable release files.
 - CI verifies plugin startup and performs the Minecraft 26.3 status handshake against the pinned PEX server.
-- The client waits for a protocol-8 server acknowledgement before sending controls; CI verifies the complete offline player handshake and bidirectional custom payloads against PEX 1.0.0.
+- The client waits for a protocol-8 server acknowledgement before sending controls; CI verifies the complete offline player handshake and bidirectional custom payloads against PEX 1.1.0.
 
 ### Install
 
