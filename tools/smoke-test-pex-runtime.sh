@@ -9,18 +9,28 @@ server_sha256=fa23f93ed9be9bfff23f7be2d0699d27f880f2ee3d96ea47864d81f07b3592d6
 server_name=pumpkin-X64-Linux
 server_url="https://github.com/Conman1533/PEX/releases/download/${server_version}/${server_name}"
 spawn_protection=${PEX_SKATE_SMOKE_SPAWN_PROTECTION:-16}
-player_spacing=${PEX_SKATE_SMOKE_PLAYER_SPACING:-0}
+spawn_y=${PEX_SKATE_SMOKE_SPAWN_Y:-128}
+player_spacing=${PEX_SKATE_SMOKE_PLAYER_SPACING:-}
+smoke_players=${PEX_SKATE_SMOKE_PLAYERS:-1}
+if [[ ! "$smoke_players" =~ ^[0-9]+$ ]] || (( 10#$smoke_players < 1 || 10#$smoke_players > 4 )); then
+  echo "PEX_SKATE_SMOKE_PLAYERS must be an integer from 1 through 4" >&2
+  exit 2
+fi
+if [[ -z "$player_spacing" ]]; then
+  # Separate gameplay smoke clients so their synthetic skate sessions do not
+  # start with overlapping board/skater collision bodies at world spawn.
+  if (( 10#$smoke_players > 1 )); then player_spacing=16; else player_spacing=0; fi
+fi
 if [[ ! "$spawn_protection" =~ ^[0-9]+$ ]]; then
   echo "PEX_SKATE_SMOKE_SPAWN_PROTECTION must be a non-negative integer" >&2
   exit 2
 fi
-if [[ ! "$player_spacing" =~ ^[0-9]+$ ]]; then
-  echo "PEX_SKATE_SMOKE_PLAYER_SPACING must be a non-negative integer" >&2
+if [[ ! "$spawn_y" =~ ^[0-9]+$ ]]; then
+  echo "PEX_SKATE_SMOKE_SPAWN_Y must be a non-negative integer" >&2
   exit 2
 fi
-smoke_players=${PEX_SKATE_SMOKE_PLAYERS:-1}
-if [[ ! "$smoke_players" =~ ^[0-9]+$ ]] || (( 10#$smoke_players < 1 || 10#$smoke_players > 4 )); then
-  echo "PEX_SKATE_SMOKE_PLAYERS must be an integer from 1 through 4" >&2
+if [[ ! "$player_spacing" =~ ^[0-9]+$ ]]; then
+  echo "PEX_SKATE_SMOKE_PLAYER_SPACING must be a non-negative integer" >&2
   exit 2
 fi
 smoke_control_only=${PEX_SKATE_SMOKE_CONTROL_ONLY:-0}
@@ -162,7 +172,7 @@ run_smoke_players() {
     if [[ "$exercise_skate" == true ]]; then
       player_args+=(--exercise-skate --exercise-timeout "$exercise_timeout"
         --exercise-duration "${PEX_SKATE_SMOKE_GAMEPLAY_DURATION:-5}"
-        --asset-root "$data_root/private")
+        --asset-root "$data_root/private" --spawn-y "$spawn_y")
       if (( player_spacing > 0 )); then
         player_spawn_offset=$(((player_index - 1) * player_spacing))
         player_args+=(--spawn-offset "$player_spawn_offset")

@@ -327,11 +327,10 @@ fn prepare_smoke_test_platform(data_root: &Path, world: &World, position: (f64, 
     let center_x = position.0.floor() as i32;
     let center_y = position.1.floor() as i32 - 1;
     let center_z = position.2.floor() as i32;
-    // A 49x49 pad gives the stock three-second ollie exercise room to build
-    // speed without falling off and respawning, including when several smoke
-    // players start eight blocks apart.
-    for dx in -24..=24 {
-        for dz in -24..=24 {
+    // The 129x9 runway gives four smoke players room to start 16 blocks apart
+    // and build speed in the test's straight-ahead input lane.
+    for dx in -64..=64 {
+        for dz in -4..=4 {
             if world.set_block_by_name(
                 BlockPos { x: center_x + dx, y: center_y, z: center_z + dz },
                 "minecraft:stone",

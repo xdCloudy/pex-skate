@@ -375,12 +375,13 @@ def play_until_ack(
     asset_root: str | None = None,
     control_only: bool = False,
     spawn_offset: float = 0.0,
+    spawn_y: float | None = None,
 ) -> None:
     saw_login = False
     local_entity_id: int | None = None
     skate_command_sent = False
     skate_hello_acknowledged = False
-    spawn_adjusted = spawn_offset == 0.0
+    spawn_adjusted = spawn_offset == 0.0 and spawn_y is None
     skate_active = False
     last_accounted_sequence: int | None = None
     consumed_control_count = 0
@@ -537,10 +538,13 @@ def play_until_ack(
             if exercise_skate and not spawn_adjusted:
                 client.send(
                     PLAY_SERVERBOUND_MOVE_PLAYER_POS,
-                    struct.pack(">3d?", x + spawn_offset, y, z, False),
+                    struct.pack(">3d?", x + spawn_offset, y if spawn_y is None else spawn_y, z, False),
                 )
                 spawn_adjusted = True
-                print(f"Moved smoke player {spawn_offset:.0f} blocks from spawn to isolate physics.")
+                if spawn_y is None:
+                    print(f"Moved smoke player {spawn_offset:.0f} blocks from spawn to isolate physics.")
+                else:
+                    print(f"Moved smoke player to Y={spawn_y:.0f} and offset X={spawn_offset:.0f} for clear test terrain.")
                 if skate_hello_acknowledged and not skate_command_sent:
                     client.send(PLAY_SERVERBOUND_CHAT_COMMAND, encode_string("skate"))
                     skate_command_sent = True
@@ -567,6 +571,8 @@ def main() -> int:
                         help="require one consumed control without movement or trick assertions")
     parser.add_argument("--spawn-offset", type=float, default=0.0,
                         help="move this smoke player horizontally from the server spawn before skating")
+    parser.add_argument("--spawn-y", type=float,
+                        help="move this smoke player to an absolute Y before skating")
     args = parser.parse_args()
     try:
         with MinecraftConnection(args.host, args.port) as client:
@@ -574,7 +580,7 @@ def main() -> int:
             config_step(client)
             play_until_ack(client, args.exercise_skate, args.exercise_timeout,
                            args.exercise_duration, args.asset_root, args.control_only,
-                           args.spawn_offset)
+                           args.spawn_offset, args.spawn_y)
     except (OSError, ValueError, ConnectionError, TimeoutError, zlib.error) as error:
         print(f"PEX player payload test failed: {error}", file=sys.stderr)
         return 1
