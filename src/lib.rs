@@ -27,12 +27,14 @@ use pumpkin_plugin_api::{
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 static SKATE_STATE: OnceLock<Mutex<ServerState>> = OnceLock::new();
 static DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static SMOKE_DIAGNOSTICS: OnceLock<bool> = OnceLock::new();
+static SMOKE_PLATFORM_PREPARED: AtomicBool = AtomicBool::new(false);
 const INPUT_TIMEOUT: Duration = Duration::from_millis(250);
 const STATE_BROADCAST_INTERVAL: Duration = Duration::from_millis(50);
 const COLLISION_REFRESH_DISTANCE: f32 = 8.0;
@@ -315,7 +317,9 @@ impl Plugin for PexSkate {
 /// The marker is written by smoke-test-pex-runtime.sh into that server's temp
 /// plugin data directory; it is never part of the published default config.
 fn prepare_smoke_test_platform(data_root: &Path, world: &World, position: (f64, f64, f64)) {
-    if !data_root.join("settings/smoke-platform.txt").is_file() {
+    if !data_root.join("settings/smoke-platform.txt").is_file()
+        || SMOKE_PLATFORM_PREPARED.swap(true, Ordering::Relaxed)
+    {
         return;
     }
     let flags = BlockFlags::NOTIFY_LISTENERS;
