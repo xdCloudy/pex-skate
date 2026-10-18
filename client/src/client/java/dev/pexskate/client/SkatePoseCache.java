@@ -13,6 +13,9 @@ public final class SkatePoseCache {
     private static final long MAX_LOCAL_PREDICTION_NANOS = 100_000_000L;
     private static final long MAX_LOCAL_PREDICTION_LEAD_NANOS = 50_000_000L;
     private static final long DEFAULT_LOCAL_PREDICTION_LEAD_NANOS = 25_000_000L;
+    // Poses arrive at 20 Hz. Half an update interval covers the average age
+    // of the newest server snapshot at receipt, before accounting for RTT.
+    private static final long SNAPSHOT_PHASE_COMPENSATION_NANOS = 25_000_000L;
     private static final long MAX_INTERPOLATION_GAP_NANOS = 500_000_000L;
     private static final float SNAP_DISTANCE_SQUARED = 64.0f;
     // Server pose snapshots are broadcast at 20 Hz. Client packet tasks can be
@@ -77,8 +80,9 @@ public final class SkatePoseCache {
 
     public static void updateInputRoundTrip(long roundTripNanos) {
         if (roundTripNanos <= 0L) return;
-        localPredictionLeadNanos = Math.clamp(roundTripNanos / 2L,
-                5_000_000L, MAX_LOCAL_PREDICTION_LEAD_NANOS);
+        localPredictionLeadNanos = Math.clamp(
+                SNAPSHOT_PHASE_COMPENSATION_NANOS + roundTripNanos / 2L,
+                SNAPSHOT_PHASE_COMPENSATION_NANOS, MAX_LOCAL_PREDICTION_LEAD_NANOS);
     }
 
     public static void resetInputRoundTrip() {

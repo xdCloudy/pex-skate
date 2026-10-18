@@ -1,5 +1,10 @@
 Experimental PEX plugin and Fabric client for Skate 3 style skating, powered by SkateGM's portable Rust simulation. This release includes a portable server/client bundle and a Windows helper that converts a Skate 3 Xbox 360 ISO supplied by the user. No game data is included.
 
+### 0.1.0-alpha.81
+
+- Add half of the 20 Hz server snapshot interval to local RTT prediction so the chase camera and skater compensate for snapshot age even on low-latency connections.
+- Keep remote skaters unpredicted and cap local prediction to the existing 100 ms safety bound.
+
 ### 0.1.0-alpha.80
 
 - Keep network-authoritative skaters in the render pass while the custom Skate camera is active, even when Minecraft's camera frustum rejects their entity bounds.
